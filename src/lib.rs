@@ -16,7 +16,7 @@
 //!     totp: &str,
 //! ) -> proton_mail_api::error::Result<()> {
 //!     let client = Client::builder()
-//!         .app_version("web-mail@0.0.0")
+//!         .app_version("your-app@0.1.0")
 //!         .build()?;
 //!
 //!     // Log in; submit the 6-digit code when the account has TOTP on.
