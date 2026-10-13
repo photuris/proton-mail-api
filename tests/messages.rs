@@ -14,7 +14,7 @@ use pgp::crypto::sym::SymmetricKeyAlgorithm;
 use pgp::types::{CompressionAlgorithm, Password};
 use proton_mail_api::error::Error;
 use proton_mail_api::keys::UnlockedKeys;
-use proton_mail_api::messages::{Attachment, MessageQuery};
+use proton_mail_api::messages::{Attachment, DecryptedBody, MessageQuery};
 use proton_mail_api::session::{Client, PersistedSession, Session};
 use rand::thread_rng;
 use serde_json::{Value, json};
@@ -326,10 +326,7 @@ async fn page_size_zero_defaults_and_is_capped_at_150() {
 }
 
 /// Fetches `msg-1` and decrypts its body.
-async fn fetch_and_decrypt(
-    session: &Session,
-    keys: &UnlockedKeys,
-) -> proton_mail_api::messages::DecryptedBody {
+async fn fetch_and_decrypt(session: &Session, keys: &UnlockedKeys) -> DecryptedBody {
     let fetched = session.message("msg-1").await;
 
     assert!(fetched.is_ok(), "message must fetch");
@@ -551,4 +548,131 @@ async fn decrypt_with_wrong_key_is_crypto_error_without_ciphertext() {
             );
         }
     }
+}
+
+/// A decrypted body with the given type and CRLF-terminated lines.
+fn body(mime_type: &str, text: &str) -> DecryptedBody {
+    DecryptedBody {
+        mime_type: mime_type.to_owned(),
+        bytes: text.replace('\n', "\r\n").into_bytes(),
+    }
+}
+
+#[test]
+fn mime_type_parameters_are_ignored() {
+    let html = body("text/html; charset=utf-8", "<p>Hello</p>");
+
+    assert!(
+        html.text_and_html() == (None, Some("<p>Hello</p>".to_owned())),
+        "html with a charset parameter"
+    );
+    assert!(
+        body("TEXT/HTML ;charset=utf-8", "<p>Hi</p>")
+            .text_and_html()
+            .1
+            .is_some(),
+        "case and spacing"
+    );
+
+    let mixed = body(
+        "multipart/mixed; boundary=x",
+        "Content-Type: multipart/mixed; boundary=x
+
+--x
+Content-Type: text/plain; charset=utf-8
+
+Words
+--x
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename=a.bin
+
+raw
+--x--
+",
+    );
+
+    assert!(mixed.mime_attachments().len() == 1, "attachment found");
+    assert!(
+        mixed.text_and_html().0.as_deref().map(str::trim) == Some("Words"),
+        "text found"
+    );
+}
+
+#[test]
+fn inline_related_resources_are_attachments_not_bodies() {
+    let related = body(
+        "multipart/mixed",
+        "From: Ann <ann@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=m
+
+--m
+Content-Type: multipart/related; boundary=x
+
+--x
+Content-Type: text/html; charset=utf-8
+
+<p>Actual body</p>
+--x
+Content-Type: text/plain; charset=utf-8; name=notes.txt
+Content-Disposition: inline; filename=notes.txt
+Content-ID: <notes@example.com>
+
+Inline file contents
+--x--
+--m--
+",
+    );
+    let (text, html) = related.text_and_html();
+    let parts = related.mime_attachments();
+
+    assert!(text.is_none(), "inline file is not the text body");
+    assert!(
+        html.as_deref().map(str::trim) == Some("<p>Actual body</p>"),
+        "html body"
+    );
+    assert!(parts.len() == 1, "one attachment");
+    assert!(parts[0].name.as_deref() == Some("notes.txt"), "name");
+    assert!(
+        parts[0].content_id.as_deref() == Some("notes@example.com"),
+        "content id"
+    );
+
+    // Named only by its disposition, not inside a related container.
+    let named = body(
+        "multipart/mixed",
+        "Content-Type: multipart/mixed; boundary=m
+
+--m
+Content-Type: text/plain
+
+Plain body
+--m
+Content-Type: text/html
+Content-Disposition: inline; filename=page.html
+
+<p>A file</p>
+--m--
+",
+    );
+    let (text, html) = named.text_and_html();
+
+    assert!(
+        text.as_deref().map(str::trim) == Some("Plain body"),
+        "text body"
+    );
+    assert!(html.is_none(), "named html is not the html body");
+    assert!(named.mime_attachments().len() == 1, "named html is a part");
+}
+
+#[test]
+fn non_mime_plaintext_under_mixed_falls_back_to_text() {
+    let raw = "Meeting: tomorrow\nBring notes\n";
+    let plain = DecryptedBody {
+        mime_type: "multipart/mixed".to_owned(),
+        bytes: raw.as_bytes().to_vec(),
+    };
+
+    assert!(plain.text_and_html() == (Some(raw.to_owned()), None));
+    assert!(plain.mime_attachments().is_empty(), "no parts");
 }

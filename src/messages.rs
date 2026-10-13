@@ -8,7 +8,7 @@ use std::io::Cursor;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use mail_parser::{MessageParser, MimeHeaders, PartType};
+use mail_parser::{MessageParser, MessagePart, MimeHeaders, PartType};
 use pgp::composed::Message as PgpMessage;
 use pgp::types::Password;
 use serde::Deserialize;
@@ -267,8 +267,9 @@ struct MimeBody {
 impl DecryptedBody {
     /// `text/plain` gives `(Some(text), None)` and `text/html` gives
     /// `(None, Some(html))`. `multipart/mixed` is parsed as a MIME message and
-    /// gives its text and HTML bodies. Any other type is treated as
-    /// `text/plain`.
+    /// gives its text and HTML bodies; when that finds nothing usable, the
+    /// bytes come back as the text. Any other type is treated as
+    /// `text/plain`. Parameters on the type (`; charset=utf-8`) are ignored.
     pub fn text_and_html(&self) -> (Option<String>, Option<String>) {
         if self.is_mixed() {
             return match parse_mime(&self.bytes) {
@@ -277,7 +278,7 @@ impl DecryptedBody {
             };
         }
 
-        if self.mime_type.eq_ignore_ascii_case("text/html") {
+        if self.media_type().eq_ignore_ascii_case("text/html") {
             (None, Some(self.lossy()))
         } else {
             (Some(self.lossy()), None)
@@ -294,8 +295,13 @@ impl DecryptedBody {
         parse_mime(&self.bytes).map_or_else(Vec::new, |mime| mime.attachments)
     }
 
+    /// The media type without parameters such as `; charset=utf-8`.
+    fn media_type(&self) -> &str {
+        self.mime_type.split(';').next().unwrap_or("").trim()
+    }
+
     fn is_mixed(&self) -> bool {
-        self.mime_type.eq_ignore_ascii_case("multipart/mixed")
+        self.media_type().eq_ignore_ascii_case("multipart/mixed")
     }
 
     fn lossy(&self) -> String {
@@ -304,49 +310,62 @@ impl DecryptedBody {
 }
 
 /// Splits an RFC 822 message into its text body, HTML body and everything
-/// else. The first non-attachment `text/plain` and `text/html` parts are the
-/// bodies. `None` when the bytes do not parse.
+/// else. The bodies are the first `text/plain` and `text/html` parts that the
+/// parser classes as body parts (it leaves out related resources after the
+/// first part) and that are neither `attachment` nor named. `None` when the
+/// bytes do not parse or hold nothing usable, such as plain text that merely
+/// looks like a header.
 fn parse_mime(bytes: &[u8]) -> Option<MimeBody> {
     let message = MessageParser::default().parse(bytes)?;
-    let mut mime = MimeBody {
-        text: None,
-        html: None,
-        attachments: Vec::new(),
+    let is_body = |p: &MessagePart<'_>| {
+        !p.content_disposition().is_some_and(|d| d.is_attachment()) && p.attachment_name().is_none()
     };
-
-    for part in &message.parts {
-        if part.is_multipart() {
-            continue;
-        }
-
-        let inline = !part
-            .content_disposition()
-            .is_some_and(|d| d.is_attachment());
-
-        match &part.body {
-            PartType::Text(text) if inline && mime.text.is_none() && is_plain(part) => {
-                mime.text = Some(text.to_string());
-            }
-            PartType::Html(html) if inline && mime.html.is_none() => {
-                mime.html = Some(html.to_string());
-            }
-            _ => mime.attachments.push(MimePart {
-                name: part.attachment_name().map(str::to_owned),
-                mime_type: part_mime_type(part),
-                content_id: part
-                    .content_id()
-                    .map(|id| id.trim_matches(['<', '>']).to_owned())
-                    .filter(|id| !id.is_empty()),
-                bytes: part.contents().to_vec(),
-            }),
-        }
+    let text = message
+        .text_bodies()
+        .find(|p| is_body(p) && matches!(p.body, PartType::Text(_)) && is_plain(p));
+    let html = message
+        .html_bodies()
+        .find(|p| is_body(p) && matches!(p.body, PartType::Html(_)));
+    let is_chosen = |p: &MessagePart<'_>| {
+        [text, html]
+            .into_iter()
+            .flatten()
+            .any(|chosen| std::ptr::eq(chosen, p))
+    };
+    // A single-part message must itself be a body; otherwise the bytes are
+    // not MIME at all (plain text that merely looks like a header).
+    if !message.root_part().is_multipart() && !is_chosen(message.root_part()) {
+        return None;
     }
 
-    Some(mime)
+    let attachments: Vec<MimePart> = message
+        .parts
+        .iter()
+        .filter(|p| !p.is_multipart() && !is_chosen(p))
+        .map(|part| MimePart {
+            name: part.attachment_name().map(str::to_owned),
+            mime_type: part_mime_type(part),
+            content_id: part
+                .content_id()
+                .map(|id| id.trim_matches(['<', '>']).to_owned())
+                .filter(|id| !id.is_empty()),
+            bytes: part.contents().to_vec(),
+        })
+        .collect();
+    let body =
+        |p: Option<&MessagePart<'_>>| p.and_then(MessagePart::text_contents).map(str::to_owned);
+    let mime = MimeBody {
+        text: body(text),
+        html: body(html),
+        attachments,
+    };
+    let has_body = |b: &Option<String>| b.as_deref().is_some_and(|s| !s.trim().is_empty());
+
+    (has_body(&mime.text) || has_body(&mime.html) || !mime.attachments.is_empty()).then_some(mime)
 }
 
 /// A part with no `Content-Type` is `text/plain` (RFC 2045).
-fn is_plain(part: &mail_parser::MessagePart<'_>) -> bool {
+fn is_plain(part: &MessagePart<'_>) -> bool {
     part.content_type()
         .is_none_or(|ct| ct.ctype().eq_ignore_ascii_case("text") && is_plain_subtype(ct.subtype()))
 }
@@ -357,7 +376,7 @@ fn is_plain_subtype(subtype: Option<&str>) -> bool {
 
 /// `type/subtype` of a part, lower-case; `message/rfc822` for a nested
 /// message and `application/octet-stream` when the part says nothing.
-fn part_mime_type(part: &mail_parser::MessagePart<'_>) -> String {
+fn part_mime_type(part: &MessagePart<'_>) -> String {
     match part.content_type() {
         Some(ct) => format!("{}/{}", ct.ctype(), ct.subtype().unwrap_or("octet-stream"))
             .to_ascii_lowercase(),
