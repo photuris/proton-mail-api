@@ -33,6 +33,7 @@ pub struct ClientBuilder {
     app_version: Option<String>,
     base_url: Option<String>,
     max_retries: Option<u32>,
+    user_agent: Option<String>,
     srp_secret: Option<Zeroizing<Vec<u8>>>,
 }
 
@@ -52,6 +53,14 @@ impl ClientBuilder {
     /// How many times a 429/503 is retried before giving up.
     pub fn max_retries(mut self, n: u32) -> Self {
         self.max_retries = Some(n);
+        self
+    }
+
+    /// Value of the `User-Agent` header; defaults to
+    /// `proton-mail-api/<version> (<os>)`. Bridge sends
+    /// `<client>/<version> (<os>)`; that is a reasonable shape to follow.
+    pub fn user_agent(mut self, v: impl Into<String>) -> Self {
+        self.user_agent = Some(v.into());
         self
     }
 
@@ -82,6 +91,10 @@ impl ClientBuilder {
 
         if let Some(n) = self.max_retries {
             config.max_retries = n;
+        }
+
+        if let Some(ua) = self.user_agent {
+            config.user_agent = ua;
         }
 
         let http = reqwest::Client::builder()

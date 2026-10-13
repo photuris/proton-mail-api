@@ -45,7 +45,8 @@ Read `README.md` first. This file holds what the code does not say.
   `PROTON_LIVE_TEST=1` and credentials from env; it is never run in CI.
   Its variables: `PROTON_LIVE_TEST`, `PROTON_USERNAME`, `PROTON_PASSWORD`,
   `PROTON_MAILBOX_PASSWORD` (optional), `PROTON_TOTP` (optional),
-  `PROTON_APP_VERSION`.
+  `PROTON_APP_VERSION`, `PROTON_USER_AGENT` (optional; overrides the default
+  User-Agent).
 - Fixtures in run 1 are synthetic: built from go-proton-api type definitions
   and rpgp-generated keys, because no real captures exist yet. When a real
   capture lands, it replaces the synthetic fixture for that endpoint.

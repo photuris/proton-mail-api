@@ -20,6 +20,12 @@ pub enum Error {
         /// Proton `Error` text from the envelope, empty when absent.
         message: String,
     },
+    /// Proton's anti-abuse system refused the request (code 2028).
+    #[error("refused by Proton anti-abuse (code 2028)")]
+    Blocked {
+        /// Proton's reason text, as sent ("" when absent).
+        message: String,
+    },
     /// Proton wants a human-verification challenge solved (code 9001).
     #[error("human verification required")]
     HumanVerificationRequired {
@@ -77,9 +83,23 @@ pub enum Error {
 /// Result alias used across the crate.
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl Error {
+    /// Proton's reason text for [`Error::Api`] and [`Error::Blocked`]; `None`
+    /// when it is empty and for every other variant. The crate never prints
+    /// it; show it only if you choose to.
+    pub fn server_message(&self) -> Option<&str> {
+        match self {
+            Self::Api { message, .. } | Self::Blocked { message } => {
+                Some(message.as_str()).filter(|m| !m.is_empty())
+            }
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Debug for Error {
-    /// Prints like a derived `Debug`, except that `Api::message` and the
-    /// verification token print as `"<redacted>"` and the verification
+    /// Prints like a derived `Debug`, except that `Api::message`,
+    /// `Blocked::message` and the verification token print as `"<redacted>"` and the verification
     /// methods print only as a count, since they are server text.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -87,6 +107,10 @@ impl fmt::Debug for Error {
                 .debug_struct("Api")
                 .field("status", status)
                 .field("code", code)
+                .field("message", &"<redacted>")
+                .finish(),
+            Self::Blocked { .. } => f
+                .debug_struct("Blocked")
                 .field("message", &"<redacted>")
                 .finish(),
             Self::HumanVerificationRequired { methods, .. } => f

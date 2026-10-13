@@ -606,3 +606,227 @@ async fn huge_retry_after_is_capped_without_overflow() {
         );
     }
 }
+
+/// The 2028 envelope Proton sends when its anti-abuse system blocks a client.
+fn blocked_body() -> serde_json::Value {
+    json!({"Code": 2028, "Error": "unusual activity"})
+}
+
+#[tokio::test]
+async fn blocked_2028_is_typed_with_reason_and_not_retried() {
+    let server = MockServer::start().await;
+    let t = transport(&server, 3);
+
+    Mock::given(path("/login"))
+        .respond_with(ResponseTemplate::new(422).set_body_json(blocked_body()))
+        .mount(&server)
+        .await;
+
+    let got = t.post_json::<_, Empty>("/login", &json!({})).await;
+    let requests = transport_requests(&server).await;
+
+    assert!(matches!(&got, Err(Error::Blocked { .. })), "got {got:?}");
+    assert_eq!(got.unwrap_err().server_message(), Some("unusual activity"));
+    assert_eq!(requests.len(), 1);
+}
+
+#[tokio::test]
+async fn blocked_2028_on_retryable_and_success_statuses_is_not_retried() {
+    for (status, retry_after) in [(429, Some("0")), (503, Some("0")), (200, None)] {
+        let server = MockServer::start().await;
+        let t = transport(&server, 3);
+        let mut response = ResponseTemplate::new(status).set_body_json(blocked_body());
+
+        if let Some(wait) = retry_after {
+            response = response.insert_header("Retry-After", wait);
+        }
+
+        Mock::given(path("/thing"))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+
+        let got = t.get_json::<Empty>("/thing", &[]).await;
+        let requests = transport_requests(&server).await;
+
+        assert!(
+            matches!(&got, Err(Error::Blocked { .. })),
+            "status {status}: got {got:?}"
+        );
+        assert_eq!(requests.len(), 1, "status {status}");
+    }
+}
+
+#[tokio::test]
+async fn blocked_2028_on_401_and_on_refresh_does_not_refresh_again() {
+    // (a) the call itself answers 401 carrying 2028.
+    let server = MockServer::start().await;
+    let t = transport(&server, 3);
+
+    t.set_tokens(Some(tokens("old")));
+
+    Mock::given(path("/thing"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(blocked_body()))
+        .mount(&server)
+        .await;
+    Mock::given(path("/auth/v4/refresh"))
+        .respond_with(refreshed())
+        .mount(&server)
+        .await;
+
+    let on_call = t.get_json::<Empty>("/thing", &[]).await;
+    let requests = transport_requests(&server).await;
+
+    assert!(
+        matches!(&on_call, Err(Error::Blocked { .. })),
+        "got {on_call:?}"
+    );
+    assert_eq!(count_to(&requests, "/auth/v4/refresh"), 0);
+    assert_eq!(requests.len(), 1);
+
+    // (b) a plain 401, then the refresh answers 2028.
+    let server = MockServer::start().await;
+    let t = transport(&server, 3);
+
+    t.set_tokens(Some(tokens("old")));
+
+    Mock::given(path("/thing"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+    Mock::given(path("/auth/v4/refresh"))
+        .respond_with(ResponseTemplate::new(422).set_body_json(blocked_body()))
+        .mount(&server)
+        .await;
+
+    let on_refresh = t.get_json::<Empty>("/thing", &[]).await;
+    let requests = transport_requests(&server).await;
+
+    assert!(
+        matches!(&on_refresh, Err(Error::Blocked { .. })),
+        "got {on_refresh:?}"
+    );
+    assert_eq!(count_to(&requests, "/auth/v4/refresh"), 1);
+    assert_eq!(count_to(&requests, "/thing"), 1);
+    assert_eq!(requests.len(), 2);
+}
+
+/// The error a 422 carrying `body` produces, from a fresh server.
+async fn error_for(body: serde_json::Value) -> Error {
+    let server = MockServer::start().await;
+    let t = transport(&server, 0);
+
+    Mock::given(path("/x"))
+        .respond_with(ResponseTemplate::new(422).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    t.get_json::<Empty>("/x", &[]).await.unwrap_err()
+}
+
+#[tokio::test]
+async fn blocked_debug_and_server_message_contract() {
+    let blocked = error_for(json!({"Code": 2028, "Error": "SECRETMARKER"})).await;
+    let bare = error_for(json!({"Code": 2028})).await;
+    let api = error_for(json!({"Code": 2001, "Error": "bad value"})).await;
+    let api_bare = error_for(json!({"Code": 2001})).await;
+
+    assert!(matches!(&blocked, Error::Blocked { .. }), "got {blocked:?}");
+    assert!(!format!("{blocked:?}").contains("SECRETMARKER"));
+    assert!(!blocked.to_string().contains("SECRETMARKER"));
+    assert_eq!(blocked.server_message(), Some("SECRETMARKER"));
+    assert!(
+        matches!(&bare, Error::Blocked { message } if message.is_empty()),
+        "got {bare:?}"
+    );
+    assert_eq!(format!("{bare:?}"), r#"Blocked { message: "<redacted>" }"#);
+    assert_eq!(bare.server_message(), None);
+    assert!(matches!(&api, Error::Api { code: 2001, .. }), "got {api:?}");
+    assert_eq!(api.server_message(), Some("bad value"));
+    assert_eq!(api_bare.server_message(), None);
+    assert_eq!(Error::WrongPassword.server_message(), None);
+}
+
+#[tokio::test]
+async fn user_agent_default_custom_and_invalid() {
+    let user_agents = |requests: &[wiremock::Request]| -> Vec<String> {
+        requests
+            .iter()
+            .map(|r| {
+                r.headers
+                    .get("user-agent")
+                    .map(|v| v.to_str().unwrap().to_owned())
+                    .unwrap_or_default()
+            })
+            .collect()
+    };
+
+    // Default.
+    let server = MockServer::start().await;
+    let t = transport(&server, 0);
+
+    Mock::given(path("/ping"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"Code": 1000})))
+        .mount(&server)
+        .await;
+    t.get_json::<Empty>("/ping", &[]).await.expect("call");
+
+    let expected = format!(
+        "proton-mail-api/{} ({})",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS
+    );
+
+    assert_eq!(user_agents(&transport_requests(&server).await), [expected]);
+
+    // Custom, on a normal request and on the refresh request.
+    let server = MockServer::start().await;
+    let mut config = TransportConfig::new(APP_VERSION);
+
+    config.base_url = server.uri();
+    config.user_agent = "posto/0.1 (linux)".into();
+
+    let t = Transport::new(reqwest::Client::new(), config).expect("valid config");
+
+    t.set_tokens(Some(tokens("old")));
+    Mock::given(path("/ping"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"Code": 1000})))
+        .mount(&server)
+        .await;
+    Mock::given(path("/auth/v4/refresh"))
+        .respond_with(refreshed())
+        .mount(&server)
+        .await;
+    t.get_json::<Empty>("/ping", &[]).await.expect("call");
+    t.refresh_tokens().await.expect("refresh");
+
+    let requests = transport_requests(&server).await;
+
+    assert_eq!(count_to(&requests, "/ping"), 1);
+    assert_eq!(count_to(&requests, "/auth/v4/refresh"), 1);
+    assert_eq!(
+        user_agents(&requests),
+        ["posto/0.1 (linux)", "posto/0.1 (linux)"]
+    );
+
+    // Invalid.
+    for bad in ["", "bad\nua"] {
+        let mut config = TransportConfig::new(APP_VERSION);
+
+        config.user_agent = bad.into();
+
+        let err = Transport::new(reqwest::Client::new(), config)
+            .err()
+            .expect("rejected");
+
+        assert!(
+            matches!(
+                err,
+                Error::InvalidConfig("user agent is not a valid header value")
+            ),
+            "got {err:?}"
+        );
+        assert!(!err.to_string().contains("bad"));
+        assert!(!format!("{err:?}").contains("bad"));
+    }
+}

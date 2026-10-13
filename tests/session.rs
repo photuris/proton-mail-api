@@ -537,3 +537,43 @@ async fn persisted_session_json_roundtrips_and_debug_is_redacted() {
         assert!(shown.contains("Two"), "debug output keeps the mode");
     }
 }
+
+#[tokio::test]
+async fn builder_user_agent_reaches_requests() {
+    let server = MockServer::start().await;
+    let v = vectors();
+    let secret = B64
+        .decode(text(&v, "client_secret_b64"))
+        .expect("secret decodes");
+
+    mount_info(&server, 4).await;
+    mount_auth(&server, text(&v, "expected_server_proof_b64"), 0, 1).await;
+
+    Client::builder()
+        .app_version(APP_VERSION)
+        .base_url(server.uri())
+        .max_retries(0)
+        .user_agent("x/1 (y)")
+        .srp_client_secret(secret)
+        .build()
+        .expect("valid config")
+        .login(text(&v, "username"), text(&v, "password"))
+        .await
+        .expect("login succeeds");
+
+    let ours: Vec<Request> = server
+        .received_requests()
+        .await
+        .expect("recording is on")
+        .into_iter()
+        .filter(|r| header(r, "x-pm-appversion").as_deref() == Some(APP_VERSION))
+        .collect();
+
+    assert_eq!(ours.len(), 2);
+    assert_eq!(ours[0].url.path(), "/auth/v4/info");
+    assert_eq!(ours[1].url.path(), "/auth/v4");
+
+    for r in &ours {
+        assert_eq!(header(r, "user-agent").as_deref(), Some("x/1 (y)"));
+    }
+}

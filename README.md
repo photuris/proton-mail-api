@@ -33,6 +33,9 @@ nothing unless `PROTON_LIVE_TEST=1`; CI never sets it.
 | `PROTON_MAILBOX_PASSWORD` | Optional; defaults to the login password |
 | `PROTON_TOTP` | Optional; a current 6-digit code, needed when 2FA is on |
 | `PROTON_APP_VERSION` | `x-pm-appversion` value to send |
+| `PROTON_USER_AGENT` | Optional; overrides the default `User-Agent` |
+
+Code 2028 is Proton's anti-abuse block; stop retrying and wait before the next attempt.
 
 ```sh
 PROTON_LIVE_TEST=1 PROTON_USERNAME=... PROTON_PASSWORD=... \

@@ -2,9 +2,10 @@
 //!
 //! Runs only when `PROTON_LIVE_TEST=1`; it is never run in CI. It reads
 //! `PROTON_USERNAME`, `PROTON_PASSWORD`, `PROTON_APP_VERSION`, and optionally
-//! `PROTON_MAILBOX_PASSWORD` (defaults to the login password) and
-//! `PROTON_TOTP` (a current 6-digit code). Failure messages name the step
-//! and the crate's error text; they never carry message content, tokens,
+//! `PROTON_MAILBOX_PASSWORD` (defaults to the login password),
+//! `PROTON_TOTP` (a current 6-digit code) and `PROTON_USER_AGENT` (overrides
+//! the default `User-Agent`). Failure messages name the step and the
+//! crate's error text; they never carry message content, tokens,
 //! passwords or key text.
 
 use std::env;
@@ -111,10 +112,13 @@ async fn live_end_to_end() {
     };
     let mailbox_password = var("PROTON_MAILBOX_PASSWORD").unwrap_or_else(|| password.clone());
 
-    let client = Client::builder()
-        .app_version(app_version.clone())
-        .build()
-        .map_err(|e| format!("build client: {e}"));
+    let mut builder = Client::builder().app_version(app_version.clone());
+
+    if let Some(user_agent) = var("PROTON_USER_AGENT") {
+        builder = builder.user_agent(user_agent);
+    }
+
+    let client = builder.build().map_err(|e| format!("build client: {e}"));
     let login = match &client {
         Ok(client) => take(
             &mut results,

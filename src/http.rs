@@ -60,6 +60,8 @@ pub struct TransportConfig {
     pub max_retries: u32,
     /// Longest single wait between retries.
     pub max_retry_wait: Duration,
+    /// Value of the `User-Agent` header.
+    pub user_agent: String,
 }
 
 impl TransportConfig {
@@ -70,6 +72,11 @@ impl TransportConfig {
             app_version: app_version.into(),
             max_retries: 3,
             max_retry_wait: Duration::from_secs(60),
+            user_agent: format!(
+                "proton-mail-api/{} ({})",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS
+            ),
         }
     }
 }
@@ -125,11 +132,17 @@ impl Transport {
     /// # Errors
     ///
     /// [`Error::InvalidConfig`] when the base URL does not parse or the app
-    /// version is empty or not a valid header value.
+    /// version or the user agent is empty or not a valid header value.
     pub fn new(http: reqwest::Client, mut config: TransportConfig) -> Result<Self> {
         if config.app_version.is_empty() || HeaderValue::from_str(&config.app_version).is_err() {
             return Err(Error::InvalidConfig(
                 "app version is not a valid header value",
+            ));
+        }
+
+        if config.user_agent.is_empty() || HeaderValue::from_str(&config.user_agent).is_err() {
+            return Err(Error::InvalidConfig(
+                "user agent is not a valid header value",
             ));
         }
 
@@ -325,6 +338,7 @@ impl Transport {
             .http
             .request(method, url)
             .header("x-pm-appversion", &self.config.app_version)
+            .header(reqwest::header::USER_AGENT, &self.config.user_agent)
             .header(reqwest::header::ACCEPT, "application/json");
 
         match self.tokens().filter(|_| auth) {
@@ -363,8 +377,8 @@ impl Transport {
     }
 
     /// Sends one request, retrying 429/503 within the configured bounds.
-    /// Returns every other response as it came, except that human and
-    /// device verification become errors here so they are never retried.
+    /// Returns every other response as it came, except that the bodies
+    /// `early_error` maps become errors here so they are never retried.
     async fn send_once(&self, req: RequestBuilder) -> Result<Buffered> {
         let mut retries = 0;
 
@@ -383,7 +397,7 @@ impl Transport {
                 .map_or(DEFAULT_RETRY_AFTER, Duration::from_secs);
             let body = response.bytes().await.map_err(Error::Transport)?.to_vec();
 
-            if let Some(err) = verification_error(&body) {
+            if let Some(err) = early_error(&body) {
                 return Err(err);
             }
 
@@ -409,8 +423,9 @@ impl Transport {
     }
 }
 
-/// Maps code 9001 and 9002 bodies to their errors, whatever the status.
-fn verification_error(body: &[u8]) -> Option<Error> {
+/// Maps code 9001, 9002 and 2028 bodies to their errors, whatever the
+/// status.
+fn early_error(body: &[u8]) -> Option<Error> {
     let envelope: ApiErrorBody = serde_json::from_slice(body).ok()?;
 
     match envelope.code {
@@ -434,6 +449,9 @@ fn verification_error(body: &[u8]) -> Option<Error> {
             Some(Error::HumanVerificationRequired { methods, token })
         }
         9002 => Some(Error::DeviceVerificationRequired),
+        2028 => Some(Error::Blocked {
+            message: envelope.error.unwrap_or_default(),
+        }),
         _ => None,
     }
 }
