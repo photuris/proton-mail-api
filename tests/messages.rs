@@ -676,3 +676,41 @@ fn non_mime_plaintext_under_mixed_falls_back_to_text() {
     assert!(plain.text_and_html() == (Some(raw.to_owned()), None));
     assert!(plain.mime_attachments().is_empty(), "no parts");
 }
+
+#[test]
+fn single_part_attachment_root_is_a_mime_part() {
+    let attachment = body(
+        "multipart/mixed",
+        "MIME-Version: 1.0
+Content-Type: application/octet-stream; name=file.bin
+Content-Disposition: attachment; filename=file.bin
+Content-Transfer-Encoding: base64
+
+AQID",
+    );
+    let parts = attachment.mime_attachments();
+
+    assert!(parts.len() == 1, "the root is one part");
+    assert!(parts[0].mime_type == "application/octet-stream", "type");
+    assert!(parts[0].name.as_deref() == Some("file.bin"), "name");
+    assert!(parts[0].bytes == [1, 2, 3], "decoded bytes");
+    assert!(attachment.text_and_html() == (None, None), "no body");
+}
+
+#[test]
+fn blank_mime_bodies_keep_their_type() {
+    let html = body(
+        "multipart/mixed",
+        "Content-Type: text/html; charset=utf-8\n\n",
+    );
+    let text = DecryptedBody {
+        mime_type: "multipart/mixed".to_owned(),
+        bytes: b"Content-Type: text/plain\r\n\r\n  ".to_vec(),
+    };
+
+    assert!(html.text_and_html() == (None, Some(String::new())), "html");
+    assert!(
+        text.text_and_html() == (Some("  ".to_owned()), None),
+        "whitespace text"
+    );
+}

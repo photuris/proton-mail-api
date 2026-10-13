@@ -8,7 +8,7 @@ use std::io::Cursor;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use mail_parser::{MessageParser, MessagePart, MimeHeaders, PartType};
+use mail_parser::{HeaderName, MessageParser, MessagePart, MimeHeaders, PartType};
 use pgp::composed::Message as PgpMessage;
 use pgp::types::Password;
 use serde::Deserialize;
@@ -313,8 +313,8 @@ impl DecryptedBody {
 /// else. The bodies are the first `text/plain` and `text/html` parts that the
 /// parser classes as body parts (it leaves out related resources after the
 /// first part) and that are neither `attachment` nor named. `None` when the
-/// bytes do not parse or hold nothing usable, such as plain text that merely
-/// looks like a header.
+/// bytes do not parse or carry neither `Content-Type` nor `MIME-Version`,
+/// such as plain text that merely looks like a header.
 fn parse_mime(bytes: &[u8]) -> Option<MimeBody> {
     let message = MessageParser::default().parse(bytes)?;
     let is_body = |p: &MessagePart<'_>| {
@@ -332,9 +332,11 @@ fn parse_mime(bytes: &[u8]) -> Option<MimeBody> {
             .flatten()
             .any(|chosen| std::ptr::eq(chosen, p))
     };
-    // A single-part message must itself be a body; otherwise the bytes are
-    // not MIME at all (plain text that merely looks like a header).
-    if !message.root_part().is_multipart() && !is_chosen(message.root_part()) {
+    // No Content-Type and no MIME-Version: not MIME at all (plain text that
+    // merely looks like a header), so the caller falls back to the raw text.
+    if message.root_part().content_type().is_none()
+        && message.header(HeaderName::MimeVersion).is_none()
+    {
         return None;
     }
 
@@ -354,14 +356,12 @@ fn parse_mime(bytes: &[u8]) -> Option<MimeBody> {
         .collect();
     let body =
         |p: Option<&MessagePart<'_>>| p.and_then(MessagePart::text_contents).map(str::to_owned);
-    let mime = MimeBody {
+
+    Some(MimeBody {
         text: body(text),
         html: body(html),
         attachments,
-    };
-    let has_body = |b: &Option<String>| b.as_deref().is_some_and(|s| !s.trim().is_empty());
-
-    (has_body(&mime.text) || has_body(&mime.html) || !mime.attachments.is_empty()).then_some(mime)
+    })
 }
 
 /// A part with no `Content-Type` is `text/plain` (RFC 2045).
