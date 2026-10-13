@@ -1,0 +1,156 @@
+//! End-to-end test against the real Proton API.
+//!
+//! Runs only when `PROTON_LIVE_TEST=1`; it is never run in CI. It reads
+//! `PROTON_USERNAME`, `PROTON_PASSWORD`, `PROTON_APP_VERSION`, and optionally
+//! `PROTON_MAILBOX_PASSWORD` (defaults to the login password) and
+//! `PROTON_TOTP` (a current 6-digit code). Failure messages name the step
+//! and the crate's error text; they never carry message content, tokens,
+//! passwords or key text.
+
+use std::env;
+
+use proton_mail_api::error::Result as ApiResult;
+use proton_mail_api::labels::system;
+use proton_mail_api::messages::MessageQuery;
+use proton_mail_api::session::{Client, Session};
+
+type Outcome = Result<(), String>;
+
+/// A variable that is set and not empty.
+fn var(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+/// A variable the test cannot run without.
+fn required(name: &str) -> Result<String, String> {
+    var(name).ok_or_else(|| format!("{name} required"))
+}
+
+/// Records a failed call under `step` and hands back a successful value.
+fn take<T>(results: &mut Vec<Outcome>, step: &str, r: ApiResult<T>) -> Option<T> {
+    match r {
+        Ok(v) => Some(v),
+        Err(e) => {
+            results.push(Err(format!("{step}: {e}")));
+            None
+        }
+    }
+}
+
+/// Records whether `ok` held; `failure` is the message when it did not.
+fn expect(results: &mut Vec<Outcome>, ok: bool, failure: &str) {
+    results.push(if ok { Ok(()) } else { Err(failure.to_string()) });
+}
+
+/// Everything after login. Steps that need an earlier result are skipped
+/// when that result is missing; the earlier failure is already recorded.
+async fn read_steps(session: &Session, mailbox_password: &str, results: &mut Vec<Outcome>) {
+    let keys = take(
+        results,
+        "unlock keys",
+        session.unlock_keys(mailbox_password).await,
+    );
+
+    if let Some(labels) = take(results, "list labels", session.labels().await) {
+        expect(results, !labels.is_empty(), "label list is empty");
+    }
+
+    let query = MessageQuery {
+        label_id: Some(system::INBOX.to_string()),
+        ..Default::default()
+    };
+    let page = take(results, "list inbox", session.list_messages(&query).await);
+    if let Some(page) = page {
+        match page.messages.first() {
+            None => results.push(Err("live test needs at least one Inbox message".to_string())),
+            Some(newest) => {
+                let message = take(results, "fetch message", session.message(&newest.id).await);
+                if let (Some(message), Some(keys)) = (message, keys.as_ref()) {
+                    if let Some(body) = take(results, "decrypt body", message.decrypt_body(keys)) {
+                        let (text, html) = body.text_and_html();
+                        let usable = [text, html].into_iter().flatten().any(|s| !s.is_empty());
+                        expect(results, usable, "decrypted body has no text or html");
+                    }
+                    if let Some(first) = message.attachments.first()
+                        && let Some(bytes) = take(
+                            results,
+                            "download attachment",
+                            session.attachment(first, keys).await,
+                        )
+                    {
+                        expect(results, !bytes.is_empty(), "decrypted attachment is empty");
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(id) = take(results, "latest event id", session.latest_event_id().await) {
+        expect(results, !id.is_empty(), "latest event id is empty");
+    }
+}
+
+#[tokio::test]
+async fn live_end_to_end() {
+    if env::var("PROTON_LIVE_TEST").as_deref() != Ok("1") {
+        eprintln!("live test skipped");
+        return;
+    }
+
+    let mut results: Vec<Outcome> = Vec::new();
+
+    let username = required("PROTON_USERNAME");
+    let password = required("PROTON_PASSWORD");
+    let app_version = required("PROTON_APP_VERSION");
+    let (Ok(username), Ok(password), Ok(app_version)) = (&username, &password, &app_version) else {
+        let first = [username, password, app_version]
+            .into_iter()
+            .find_map(Result::err)
+            .unwrap_or_default();
+        panic!("{first}");
+    };
+    let mailbox_password = var("PROTON_MAILBOX_PASSWORD").unwrap_or_else(|| password.clone());
+
+    let client = Client::builder()
+        .app_version(app_version.clone())
+        .build()
+        .map_err(|e| format!("build client: {e}"));
+    let login = match &client {
+        Ok(client) => take(
+            &mut results,
+            "login",
+            client.login(username, password).await,
+        ),
+        Err(e) => {
+            results.push(Err(e.clone()));
+            None
+        }
+    };
+
+    if let Some(outcome) = login {
+        let session = outcome.session;
+        let mut ready = true;
+        if outcome.needs_totp {
+            ready = match var("PROTON_TOTP") {
+                Some(code) => take(
+                    &mut results,
+                    "submit totp",
+                    session.submit_totp(&code).await,
+                )
+                .is_some(),
+                None => {
+                    results.push(Err("PROTON_TOTP required".to_string()));
+                    false
+                }
+            };
+        }
+        if ready {
+            read_steps(&session, &mailbox_password, &mut results).await;
+        }
+        take(&mut results, "logout", session.logout().await);
+    }
+
+    if let Some(message) = results.into_iter().find_map(Result::err) {
+        panic!("{message}");
+    }
+}

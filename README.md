@@ -14,10 +14,30 @@ notice. Bridge is the only route Proton supports.
 - Read: labels, message list, fetch and decrypt body and attachments,
   change-events feed
 - Triage: mark read/unread, move, label
-- Send: plaintext to external recipients, PGP to Proton recipients
+- Send: plaintext to external recipients, PGP to Proton recipients (run 2;
+  not in this release)
 
 Out of scope for now: calendar, SimpleLogin aliases, contacts beyond lookup
 of recipient public keys.
+
+## Live test
+
+`tests/live.rs` runs the whole stack against the real Proton API. It does
+nothing unless `PROTON_LIVE_TEST=1`; CI never sets it.
+
+| Variable | Use |
+|----------|-----|
+| `PROTON_LIVE_TEST` | `1` to run the test |
+| `PROTON_USERNAME` | Account username |
+| `PROTON_PASSWORD` | Login password |
+| `PROTON_MAILBOX_PASSWORD` | Optional; defaults to the login password |
+| `PROTON_TOTP` | Optional; a current 6-digit code, needed when 2FA is on |
+| `PROTON_APP_VERSION` | `x-pm-appversion` value to send |
+
+```sh
+PROTON_LIVE_TEST=1 PROTON_USERNAME=... PROTON_PASSWORD=... \
+  PROTON_APP_VERSION=... cargo test --test live
+```
 
 ## Checks
 
