@@ -11,6 +11,9 @@ use serde_json::json;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// The app version every test transport sends.
+const APP_VERSION: &str = "web-mail@test";
+
 /// A decoded success body.
 #[derive(Debug, Deserialize)]
 struct Thing {
@@ -20,7 +23,7 @@ struct Thing {
 
 /// A transport pointed at `server` that allows `max_retries` retries.
 fn transport(server: &MockServer, max_retries: u32) -> Transport {
-    let mut config = TransportConfig::new("web-mail@test");
+    let mut config = TransportConfig::new(APP_VERSION);
 
     config.base_url = server.uri();
     config.max_retries = max_retries;
@@ -37,12 +40,25 @@ fn tokens(suffix: &str) -> AuthTokens {
     }
 }
 
-/// Requests `server` recorded for `path`. wiremock's pooled servers also
-/// record unrelated housekeeping requests to `/`, so tests count only theirs.
-async fn requests_to(server: &MockServer, path: &str) -> Vec<wiremock::Request> {
+/// Every request the transport sent to `server`, whatever the path. Requests
+/// that lack the configured `x-pm-appversion` header are not the transport's
+/// (the flake this guards against showed stray header-less hits on `/`), so
+/// they are left out; any extra request the library itself makes still counts.
+async fn transport_requests(server: &MockServer) -> Vec<wiremock::Request> {
     let all = server.received_requests().await.expect("recording is on");
 
-    all.into_iter().filter(|r| r.url.path() == path).collect()
+    all.into_iter()
+        .filter(|r| {
+            r.headers
+                .get("x-pm-appversion")
+                .is_some_and(|v| v.to_str().is_ok_and(|v| v == APP_VERSION))
+        })
+        .collect()
+}
+
+/// How many of `requests` went to `path`.
+fn count_to(requests: &[wiremock::Request], path: &str) -> usize {
+    requests.iter().filter(|r| r.url.path() == path).count()
 }
 
 /// The 9001 envelope Proton sends for a human-verification challenge.
@@ -85,7 +101,7 @@ async fn sends_required_headers_with_and_without_tokens() {
         .await
         .expect("authenticated call");
 
-    let seen = requests_to(&server, "/ping").await;
+    let seen = transport_requests(&server).await;
     let value = |i: usize, name: &str| {
         seen[i]
             .headers
@@ -177,7 +193,7 @@ async fn challenge_on_429_is_typed_not_retried() {
         .await;
 
     let got = t.post_json::<_, Empty>("/login", &json!({})).await;
-    let requests = requests_to(&server, "/login").await;
+    let requests = transport_requests(&server).await;
 
     assert!(
         matches!(got, Err(Error::HumanVerificationRequired { .. })),
@@ -206,7 +222,7 @@ async fn rate_limit_honours_retry_after_then_succeeds() {
     let start = Instant::now();
     let got = t.get_json::<Thing>("/thing", &[]).await;
     let elapsed = start.elapsed();
-    let requests = requests_to(&server, "/thing").await;
+    let requests = transport_requests(&server).await;
 
     assert!(matches!(&got, Ok(x) if x.name == "ok"), "got {got:?}");
     assert_eq!(requests.len(), 2);
@@ -228,7 +244,7 @@ async fn rate_limit_exhausted_is_rate_limited_error() {
         .await;
 
     let got = t.get_json::<Empty>("/thing", &[]).await;
-    let requests = requests_to(&server, "/thing").await;
+    let requests = transport_requests(&server).await;
 
     assert!(
         matches!(&got, Err(Error::RateLimited { retry_after }) if retry_after.is_zero()),
@@ -343,12 +359,12 @@ async fn refresh_endpoint_401_is_session_expired_with_one_refresh() {
         .await;
 
     let got = t.get_json::<Empty>("/thing", &[]).await;
-    let calls = requests_to(&server, "/thing").await.len();
-    let refreshes = requests_to(&server, "/auth/v4/refresh").await.len();
+    let requests = transport_requests(&server).await;
+    let refreshes = count_to(&requests, "/auth/v4/refresh");
 
     assert!(matches!(got, Err(Error::SessionExpired)), "got {got:?}");
     assert_eq!(refreshes, 1);
-    assert_eq!(calls, 1);
+    assert_eq!(requests.len(), 2);
 }
 
 #[tokio::test]
@@ -453,12 +469,12 @@ async fn concurrent_unauthorized_requests_share_one_refresh() {
         t.get_json::<Thing>("/thing", &[]),
         t.get_json::<Thing>("/thing", &[]),
     );
-    let calls = requests_to(&server, "/thing").await.len();
-    let refreshes = requests_to(&server, "/auth/v4/refresh").await.len();
+    let requests = transport_requests(&server).await;
+    let refreshes = count_to(&requests, "/auth/v4/refresh");
     assert!(matches!(&a, Ok(x) if x.name == "ok"), "got {a:?}");
     assert!(matches!(&b, Ok(x) if x.name == "ok"), "got {b:?}");
     assert_eq!(refreshes, 1);
-    assert_eq!(calls, 4);
+    assert_eq!(requests.len(), 5);
     assert_eq!(t.tokens().expect("tokens kept").access_token, "access-new");
 }
 
@@ -557,7 +573,7 @@ async fn explicit_code_zero_is_an_api_error() {
 #[tokio::test]
 async fn huge_retry_after_is_capped_without_overflow() {
     let server = MockServer::start().await;
-    let mut config = TransportConfig::new("web-mail@test");
+    let mut config = TransportConfig::new(APP_VERSION);
 
     config.base_url = server.uri();
     config.max_retries = 1;
