@@ -1,0 +1,38 @@
+{
+  "client_ephemeral_b64": "mK+eSMosfZO/Cs5s+vcbjpsN7F8UAObwlKKnCy/z9FpoMRM2PfTe5ywLBgffmLYaapPq7XOxaqaj08kcZLHcM1fIA2JQZZTKPnESN1qAQztJ3/YHMI0op6yBgzx9803OjIznjCD2B3XBSMOHIG4oG0UwocsIX32hiMnYlMMkt8NGrityPlnmEbxpRna3fu9LEZ+v0uo6PjKCrO7+9E3uaMi64HadXBfyx2raBFFwA+yh7FvE7U+hl3AJclEre4d8pmfhMdxXze1soJI8fMuqaa07rY0r0rF5mLLTuqTIGRFkU1qG9loq9+IMsSwgkt1P3ghW63JK7Y6LWdDy0d6cAg==",
+  "client_proof_b64": "Qb+1+jEqHRqpJ3nEJX2FEj0kXgCIWHngO0eT4R2Idkwke/ceCIUmQa0RfTYU53ybO1AVergtb7N0W/3bathdHT9FAHhy0vDGQDg/yPnuUneqV76NuU+pQHnO83gcjmZjDq/zvRRSD7dtIORRK97xhdR9W9bG5XRGr2c9Zev40YVcXgUiNUG/0zHSKQfEhUpMKxdauKtGC+dZnZzU6xaU0qvulYEsraawurRf0b1VXwohM6KE52Fj5xlS2FWZ3Mg0WIOC5KW5ziI6QirEUDK2pH/Rxvu4HcW9aMuppUmHk9Bm6kdg99o3vl0G7OgmEI7y6iyEYmXqH44XGORJ2sDMxQ==",
+  "client_secret_b64": "sZJW0Jr9ysC6dIn/J+1va1fjqD8CFsHUDkFE8/1HiUlhEI5lFzhuBSuOgiYjyQU/J15wKeGydFtawi3copbncXAcHKEA2ge2LGlfiC3N2gDhhygQDL79/hJXW0ngw3uu88TG4wztipcWBmJ4WkZDqjyQPO1CihBRp4IbiK6vCxuOx6LPeVV8h6IuzgSsGt0TrI9tVOrrHP5PjD7W6D6EutxM42+9S57ngY50TuWCb57aj+EpGfn0HbQCvHXTYT8IWAebcODLGoQ1hYhMFNbADFulOw2fnwx6YZtCdk2b199Snd0JupI+NNnJCVLyhBRbn+hytEufu5cbv2Sxln+MUw==",
+  "expected_server_proof_b64": "SLCSIClioSAtozauZZzcJuVPyY+MjnxfJSgEe9y6RafgjlPqnhQTZclRKPGsEhxVyWan7PIzhL+frPyZNaE1QaV5zbqz1yf9RXpGyTjZwU3FuVCJpkhp6iiCK3Wd2SemxawFXC06dgAdJ7I3HKvfkXeMANOUUh5ofjnJtXg42OGp4x1lKoFcH+IbB/CvRNQCmRTyhOiBJmZyUFwxHXLT/h+PlD0XSehcyybIIBIsscQ7ZPVPxQw4BqlqoYzTjjXPJxLxeQUQm2g9bPzT+izuR0VOPDtjt+dXrWny90k2nzS0Bs2YvNIqbJn1aQwFZr42p/O1I9n5S3mYtMgGk/7b1g==",
+  "hashed_password_b64": "UHwyXL718YTYWiTYh8/LPLSBa7DgezL5QJXZEgzEeeomD0Mf62Zu6qNkQj0z/sDxf3fIGTn0U8gk4jWCBLMnmY5jPwvTX63SyvmWpF6LiMhWvz6bUZh+5z/hGQiI/YdRE4DW+2PXAmnGQJZ1MgTouDnLLavGuvSrC0qzzI37QNUDyAtFWwrXwbNqhpWUa1PQDJ+gHpQjnCXa7dVlpj5TQbDvPEZ9JrA7c37TopINerrBmU/jhcPUFp8EHwsScuRxxDBXIkYBP1gIVTtJSTPLXWKJlrdqNzHuJXxOrpeOiDjuIDFhWK2v/gXbyfwp53ph80VPd3eRPQWpCkO3iqKWUg==",
+  "key_password_vectors": [
+    {
+      "bcrypt_full": "$2y$10$......................5JGYT6uP3SIc.ysDCdLjikJ1.t9N2N6",
+      "key_password": "5JGYT6uP3SIc.ysDCdLjikJ1.t9N2N6",
+      "key_salt_b64": "AAAAAAAAAAAAAAAAAAAAAA==",
+      "password": "abc123"
+    },
+    {
+      "bcrypt_full": "$2y$10$.QLDX2kpxc6/GyTlgYtL5uJq840/PmCuAwJN8pb8w3ZVzI2ppZmCe",
+      "key_password": "Jq840/PmCuAwJN8pb8w3ZVzI2ppZmCe",
+      "key_salt_b64": "ASNFZ4mrze8BI0VniavN7w==",
+      "password": "abc123"
+    },
+    {
+      "bcrypt_full": "$2y$10$wIja39AtMZdmg6gnVMdupuSdOADjsWILElIgmbCrMBuQWAzIoFNzK",
+      "key_password": "SdOADjsWILElIgmbCrMBuQWAzIoFNzK",
+      "key_salt_b64": "yKlc5/CvObfoi8ipXOfwrw==",
+      "password": "abc123"
+    }
+  ],
+  "modulus_b64": "W2z5HBi8RvsfYzZTS7qBaUxxPhsfHJFZpu3Kd6s1JafNrCCH9rfvPLrfuqocxWPgWDH2R8neK7PkNvjxto9TStuY5z7jAzWRvFWN9cQhAKkdWgy0JY6ywVn22+HFpF4cYesHrqFIKUPDMSSIlWjBVmEJZ/MusD44ZT29xcPrOqeZvwtCffKtGAIjLYPZIEbZKnDM1Dm3q2K/xS5h+xdhjnndhsrkwm9U9oyA2wxzSXFL+pdfj2fOdRwuR5nW0J2NFrq3kJjkRmpO/Genq1UW+TEknIWAb6VzJJJA244K/H8cnSx2+nSNZO3bbo6Ys228ruV9A8m6DhxmS+bihN3ttQ==",
+  "modulus_clearsigned": "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256\n\nW2z5HBi8RvsfYzZTS7qBaUxxPhsfHJFZpu3Kd6s1JafNrCCH9rfvPLrfuqocxWPgWDH2R8neK7PkNvjxto9TStuY5z7jAzWRvFWN9cQhAKkdWgy0JY6ywVn22+HFpF4cYesHrqFIKUPDMSSIlWjBVmEJZ/MusD44ZT29xcPrOqeZvwtCffKtGAIjLYPZIEbZKnDM1Dm3q2K/xS5h+xdhjnndhsrkwm9U9oyA2wxzSXFL+pdfj2fOdRwuR5nW0J2NFrq3kJjkRmpO/Genq1UW+TEknIWAb6VzJJJA244K/H8cnSx2+nSNZO3bbo6Ys228ruV9A8m6DhxmS+bihN3ttQ==\n-----BEGIN PGP SIGNATURE-----\nVersion: ProtonMail\nComment: https://protonmail.com\n\nwl4EARYIABAFAlwB1j0JEDUFhcTpUY8mAAD8CgEAnsFnF4cF0uSHKkXa1GIa\nGO86yMV4zDZEZcDSJo0fgr8A/AlupGN9EdHlsrZLmTA1vhIx+rOgxdEff28N\nkvNM7qIK\n=q6vu\n-----END PGP SIGNATURE-----",
+  "multiplier_b64": "raf82kJNLVYHVXUnIV2l3JACJGEXoZwHaj6/Zp5EBD94bnks7ZKOCFCXN/XEDPlk8/Q79VoUOHGg+JV7jHeZPiUf/K0n5jAA3a449g8bsfq9MOAdg/QwroykRDgwCv9/B9V4M1lezDMFq8YSaNFU+wgl+O8cplJs+JamIVrQbTwuTC4rm3v4wC8UpmhlRQDyWszi30CQ4Ure0lbkXMolvqB5x3i1ZQptZ+RrMuRiyk1he3mqOY6Eha0LgEVIS4kvNJYElELhsANaZy+AEXKa5XdL3REJJp/YdSBYi/H8A5UK44qGDD9vyVC15P2CxG0RcjjXiPVT1TPw+kmJz7T+HQ==",
+  "note": "Captured from ProtonMail/go-srp (srp_test.go TestSRPauth case) with an instrumented GenerateProofs that exports the client secret; RandReader = math/rand seed 42. All byte strings are std base64 of the little-endian 256-byte encodings go-srp uses on the wire.",
+  "password": "abc123",
+  "salt_b64": "yKlc5/CvObfoiw==",
+  "scrambling_b64": "3gNmZiIuasFO0ipCjcMZ36HrLimFbXe0nKafeZFfSDxSc7eDwzy3LqyMMZYqY1kVloGFBM8L0QXtx7fx1BNDncuxNTKURwA8EmkG+kITDocfuS3Xrc4WJP7YiecNyf0heJiyPuakxCVig35qVA182RSdDgw6pGCtvv15cWaz4D/2LDdZd4vV0vwn5jvHNVDIdy9dBrBw871REw/NH2yGtFzvuHw0hMr9pcVDWJKf704HQMnopQJPzYCREtF6ebdMEU/JeDgVOqmt3tqo7/9aJ12MHWvDrySdd307I4LkGT+2pXff14fmWMeRqiY+DsS6w7VLx/EIQqZiw+CErITLMQ==",
+  "server_ephemeral_b64": "l13IQSVFBEV0ZZREuRQ4ZgP6OpGiIfIjbSDYQG3Yp39FkT2B/k3n1ZhwqrAdy+qvPPFq/le0b7UDtayoX4aOTJihoRvifas8Hr3icd9nAHqd0TUBbkZkT6Iy6UpzmirCXQtEhvGQIdOLuwvy+vZWh24G2ahBM75dAqwkP961EJMh67/I5PA5hJdQZjdPT5luCyVa7BS1d9ZdmuR0/VCjUOdJbYjgtIH7BQoZs+KacjhUN8gybu+fsycvTK3eC+9mCN2Y6GdsuCMuR3pFB0RF9eKae7cA6RbJfF1bjm0nNfWLXzgKguKBOeF3GEAsnCgK68q82/pq9etiUDizUlUBcA==",
+  "shared_secret_b64": "0gyAbYwVfJgBIB8Ld4fvGnEJJMrXdV5h1CMPnv4bvmJ75kBg+Nt3IOIlNR0jZOiimXN+Nj8WYlw5GpTNQvXKuK9ERwvyhOSPSd23yDvrfPMugz3a5bIxwjElOF+K4pfnkydKnCFO2TKP3DexSYltRD6IKY6aCjXSAWwb+DNGv7Qs46qbnRR4SiGasXiCeeYHQdqlOQquUPbtkmWpKgW2DNbYcIq9u9bjZa8S4txZfkOl2uxo43sUOrdhotVCncACVn50CGjBkqJDYn2qYmXgrSxQBcpaB+GE9fa7+12xJrTFc2Y9H5JSHk/BxVG8Np0Y2zfqFeTz9ACKgr0s0PKiBg==",
+  "username": "jakubqa",
+  "version": 4
+}

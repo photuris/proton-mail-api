@@ -1,14 +1,15 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Unofficial, pure-Rust client for the Proton Mail API.
+//!
+//! See `README.md` for scope and `AGENTS.md` for the rules that bind this
+//! crate (no secrets in errors or logs, zeroized key material, fixture tests).
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod actions;
+pub mod error;
+pub mod events;
+pub mod http;
+pub mod keys;
+pub mod labels;
+pub mod messages;
+pub mod session;
+pub mod srp;
+pub mod types;
