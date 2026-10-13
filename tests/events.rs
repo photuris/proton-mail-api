@@ -1,5 +1,6 @@
 //! Offline tests for the change-event feed, against a wiremock server.
 
+use proton_mail_api::error::Error;
 use proton_mail_api::events::{Event, EventAction};
 use proton_mail_api::session::{Client, PersistedSession, Session};
 use serde_json::{Value, json};
@@ -142,6 +143,58 @@ async fn events_follows_more_chain() {
     assert_eq!(ids, ["e1", "e2", "e3"]);
     assert!(!batch.more);
     assert_eq!(batch.latest_event_id, "e3");
+}
+
+#[tokio::test]
+async fn events_cursor_is_sent_as_one_path_segment() {
+    let server = MockServer::start().await;
+
+    mount_get(
+        &server,
+        "/core/v4/events/s",
+        json!({ "EventID": "n/x?y", "More": 1 }),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "EventID": "end" })))
+        .mount(&server)
+        .await;
+
+    let s = session(&server);
+
+    s.events("e?x=1").await.expect("query-like cursor");
+    s.events("../users").await.expect("dot-segment cursor");
+
+    for dots in [".", ".."] {
+        assert!(
+            matches!(s.events(dots).await, Err(Error::InvalidConfig(_))),
+            "a dot-segment cursor is refused"
+        );
+    }
+
+    let batch = s.events("s").await.expect("followed cursor");
+
+    assert_eq!(batch.latest_event_id, "end");
+
+    let seen: Vec<(String, Option<String>)> = server
+        .received_requests()
+        .await
+        .expect("recording is on")
+        .iter()
+        .map(|r| (r.url.path().to_owned(), r.url.query().map(str::to_owned)))
+        .collect();
+    let want = [
+        "/core/v4/events/e%3Fx%3D1",
+        "/core/v4/events/%2E%2E%2Fusers",
+        "/core/v4/events/s",
+        "/core/v4/events/n%2Fx%3Fy",
+    ];
+
+    assert_eq!(
+        seen,
+        want.map(|p| (p.to_owned(), None)),
+        "every cursor is one path segment and no query; dot cursors send nothing"
+    );
 }
 
 #[tokio::test]

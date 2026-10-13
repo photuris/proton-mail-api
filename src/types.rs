@@ -67,3 +67,37 @@ pub struct Empty {
     #[serde(rename = "Code", default)]
     pub code: i64,
 }
+
+/// Percent-encodes `s` so it is exactly one URL path segment. Only
+/// `A-Za-z0-9-_~` pass through; every other byte becomes `%XX` (uppercase
+/// hex). Dots are encoded too, so an id can never read as a `.` or `..`
+/// segment or hide one behind an encoded `/`.
+pub(crate) fn path_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'~') {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_segment;
+
+    #[test]
+    fn path_segment_encodes_everything_but_unreserved() {
+        assert_eq!(path_segment("aZ09-_~"), "aZ09-_~");
+        assert_eq!(path_segment("e?x=1"), "e%3Fx%3D1");
+        assert_eq!(path_segment("a/b c%"), "a%2Fb%20c%25");
+        assert_eq!(path_segment("../users"), "%2E%2E%2Fusers");
+        assert_eq!(path_segment("."), "%2E");
+        assert_eq!(path_segment("é"), "%C3%A9");
+        assert_eq!(path_segment(""), "");
+    }
+}

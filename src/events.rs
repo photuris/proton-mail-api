@@ -5,10 +5,10 @@
 
 use serde::Deserialize;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::labels::Label;
 use crate::session::Session;
-use crate::types::ApiBool;
+use crate::types::{ApiBool, path_segment};
 
 /// Most events one [`Session::events`] call collects (as go-proton-api).
 const MAX_COLLECTED_EVENTS: usize = 50;
@@ -137,21 +137,29 @@ impl Session {
     }
 
     /// Reads the events after `since`, following the server's `More` flag for
-    /// at most 50 events. The first event may repeat `since` when nothing is
+    /// at most 50 events. `since` and each followed id are sent as one
+    /// escaped path segment. The first event may repeat `since` when nothing is
     /// new; it is returned all the same.
     ///
     /// # Errors
     ///
-    /// Any [`Error`](crate::error::Error) the transport classifies to, or
-    /// `InvalidResponse` when a reply does not parse.
+    /// [`Error::InvalidConfig`] when `since` or a followed id is `.` or `..`,
+    /// before any request for it is sent; otherwise any [`Error`] the
+    /// transport classifies to, or `InvalidResponse` when a reply does not
+    /// parse.
     pub async fn events(&self, since: &str) -> Result<EventBatch> {
         let mut events: Vec<Event> = Vec::new();
         let mut next = since.to_owned();
 
         loop {
+            // No escaping helps here: URL parsing reads `%2E%2E` as `..` too.
+            if matches!(next.as_str(), "." | "..") {
+                return Err(Error::InvalidConfig("event id is a dot segment"));
+            }
+
             let event: Event = self
                 .transport()
-                .get_json(&format!("/core/v4/events/{next}"), &[])
+                .get_json(&format!("/core/v4/events/{}", path_segment(&next)), &[])
                 .await?;
             let more = event.more.0;
 
