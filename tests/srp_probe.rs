@@ -75,7 +75,10 @@ fn hash_password_v4_matches_go_srp() {
         &b64(&v.modulus_b64),
     )
     .expect("hash");
-    assert_eq!(hashed, b64(&v.hashed_password_b64));
+    assert!(
+        hashed == b64(&v.hashed_password_b64),
+        "hashed password differs from the go-srp vector"
+    );
 }
 
 #[test]
@@ -140,7 +143,10 @@ fn key_password_matches_go_srp_mailbox_password() {
     for kv in v.key_password_vectors {
         let kp = srp::key_password(kv.password.as_bytes(), &b64(&kv.key_salt_b64))
             .expect("key password");
-        assert_eq!(kp.as_str(), kv.key_password);
+        assert!(
+            kp.as_str() == kv.key_password,
+            "key password differs from the go-srp vector"
+        );
         assert_eq!(kp.len(), 31);
     }
 }
