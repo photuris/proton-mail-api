@@ -54,13 +54,14 @@ const MODULUS_PUBKEY: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----\r\n\r\nxjMEXA
 /// Verifies the clear-signed modulus text against Proton's modulus key
 /// and returns the decoded modulus (256 bytes for a genuine one).
 pub fn verify_modulus(clearsigned: &str) -> Result<Vec<u8>, SrpError> {
-    // go-srp rejects any bytes after the signed block; only whitespace is tolerated here.
+    // go-srp rejects any bytes after the signed block; only the line ending its decoder consumes
+    // (CR/LF) is tolerated, not spaces, tabs or other whitespace.
     let end = clearsigned
         .find(END_SIGNATURE)
         .ok_or(SrpError::InvalidModulusSignature)?
         + END_SIGNATURE.len();
     let (block, rest) = clearsigned.split_at(end);
-    if !rest.trim().is_empty() {
+    if !rest.trim_matches(['\r', '\n']).is_empty() {
         return Err(SrpError::DataAfterModulus);
     }
     let (message, _) = CleartextSignedMessage::from_string(block)
@@ -259,4 +260,27 @@ pub fn generate_proofs_with_secret(
     params
         .proofs(&BigUint::from_bytes_le(client_secret))
         .ok_or(SrpError::ClientSecretOutOfRange)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn signed_modulus() -> String {
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/srp-vectors.json")).unwrap();
+        v["modulus_clearsigned"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn only_crlf_may_follow_signed_modulus() {
+        let signed = signed_modulus();
+        for suffix in [" ", "\t", "\u{a0}", " \n", "data"] {
+            let result = verify_modulus(&format!("{signed}{suffix}"));
+            assert_eq!(result, Err(SrpError::DataAfterModulus), "suffix {suffix:?}");
+        }
+        for suffix in ["\n", "\r\n"] {
+            assert!(verify_modulus(&format!("{signed}{suffix}")).is_ok());
+        }
+    }
 }
