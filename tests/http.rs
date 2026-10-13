@@ -1,5 +1,6 @@
 //! Offline tests for the transport, against a wiremock server.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use proton_mail_api::error::Error;
@@ -34,6 +35,14 @@ fn tokens(suffix: &str) -> AuthTokens {
         access_token: format!("access-{suffix}"),
         refresh_token: format!("refresh-{suffix}"),
     }
+}
+
+/// Requests `server` recorded for `path`. wiremock's pooled servers also
+/// record unrelated housekeeping requests to `/`, so tests count only theirs.
+async fn requests_to(server: &MockServer, path: &str) -> Vec<wiremock::Request> {
+    let all = server.received_requests().await.expect("recording is on");
+
+    all.into_iter().filter(|r| r.url.path() == path).collect()
 }
 
 /// The 9001 envelope Proton sends for a human-verification challenge.
@@ -76,7 +85,7 @@ async fn sends_required_headers_with_and_without_tokens() {
         .await
         .expect("authenticated call");
 
-    let seen = server.received_requests().await.expect("recording is on");
+    let seen = requests_to(&server, "/ping").await;
     let value = |i: usize, name: &str| {
         seen[i]
             .headers
@@ -168,7 +177,7 @@ async fn challenge_on_429_is_typed_not_retried() {
         .await;
 
     let got = t.post_json::<_, Empty>("/login", &json!({})).await;
-    let requests = server.received_requests().await.expect("recording is on");
+    let requests = requests_to(&server, "/login").await;
 
     assert!(
         matches!(got, Err(Error::HumanVerificationRequired { .. })),
@@ -197,7 +206,7 @@ async fn rate_limit_honours_retry_after_then_succeeds() {
     let start = Instant::now();
     let got = t.get_json::<Thing>("/thing", &[]).await;
     let elapsed = start.elapsed();
-    let requests = server.received_requests().await.expect("recording is on");
+    let requests = requests_to(&server, "/thing").await;
 
     assert!(matches!(&got, Ok(x) if x.name == "ok"), "got {got:?}");
     assert_eq!(requests.len(), 2);
@@ -219,7 +228,7 @@ async fn rate_limit_exhausted_is_rate_limited_error() {
         .await;
 
     let got = t.get_json::<Empty>("/thing", &[]).await;
-    let requests = server.received_requests().await.expect("recording is on");
+    let requests = requests_to(&server, "/thing").await;
 
     assert!(
         matches!(&got, Err(Error::RateLimited { retry_after }) if retry_after.is_zero()),
@@ -334,15 +343,12 @@ async fn refresh_endpoint_401_is_session_expired_with_one_refresh() {
         .await;
 
     let got = t.get_json::<Empty>("/thing", &[]).await;
-    let requests = server.received_requests().await.expect("recording is on");
-    let refreshes = requests
-        .iter()
-        .filter(|r| r.url.path() == "/auth/v4/refresh")
-        .count();
+    let calls = requests_to(&server, "/thing").await.len();
+    let refreshes = requests_to(&server, "/auth/v4/refresh").await.len();
 
     assert!(matches!(got, Err(Error::SessionExpired)), "got {got:?}");
     assert_eq!(refreshes, 1);
-    assert_eq!(requests.len(), 2);
+    assert_eq!(calls, 1);
 }
 
 #[tokio::test]
@@ -387,7 +393,7 @@ fn error_and_token_debug_are_redacted() {
         message: "SECRETMARKER".into(),
     };
     let hv = Error::HumanVerificationRequired {
-        methods: vec!["captcha".into()],
+        methods: vec!["SECRETMARKER".into()],
         token: "SECRETMARKER".into(),
     };
     let envelope: ApiErrorBody = serde_json::from_value(json!({
@@ -405,7 +411,182 @@ fn error_and_token_debug_are_redacted() {
     assert!(!format!("{hv:?}").contains("SECRETMARKER"));
     assert!(!format!("{envelope:?}").contains("SECRETMARKER"));
     assert!(format!("{api:?}").contains("2001"));
+    assert!(format!("{hv:?}").contains("<1 items>"), "{hv:?}");
     assert!(
         matches!(&hv, Error::HumanVerificationRequired { token, .. } if token == "SECRETMARKER")
     );
+}
+
+#[tokio::test]
+async fn concurrent_unauthorized_requests_share_one_refresh() {
+    let server = MockServer::start().await;
+    let t = transport(&server, 3);
+
+    t.set_tokens(Some(tokens("old")));
+
+    Mock::given(path("/thing"))
+        .and(header("authorization", "Bearer access-old"))
+        .respond_with(ResponseTemplate::new(401).set_delay(Duration::from_millis(100)))
+        .expect(2)
+        .mount(&server)
+        .await;
+    // Refresh tokens are single-use: a second exchange is refused.
+    Mock::given(path("/auth/v4/refresh"))
+        .respond_with(refreshed().set_delay(Duration::from_millis(200)))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(path("/auth/v4/refresh"))
+        .respond_with(
+            ResponseTemplate::new(422).set_body_json(json!({"Code": 10013, "Error": "used"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/thing"))
+        .and(header("authorization", "Bearer access-new"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"Name": "ok"})))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let (a, b) = tokio::join!(
+        t.get_json::<Thing>("/thing", &[]),
+        t.get_json::<Thing>("/thing", &[]),
+    );
+    let calls = requests_to(&server, "/thing").await.len();
+    let refreshes = requests_to(&server, "/auth/v4/refresh").await.len();
+    assert!(matches!(&a, Ok(x) if x.name == "ok"), "got {a:?}");
+    assert!(matches!(&b, Ok(x) if x.name == "ok"), "got {b:?}");
+    assert_eq!(refreshes, 1);
+    assert_eq!(calls, 4);
+    assert_eq!(t.tokens().expect("tokens kept").access_token, "access-new");
+}
+
+#[tokio::test]
+async fn unauthorized_outranks_error_code_mappings() {
+    // No tokens stored: a 401 carrying 5003.
+    let server = MockServer::start().await;
+    let t = transport(&server, 3);
+
+    Mock::given(path("/thing"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(json!({"Code": 5003, "Error": "version"})),
+        )
+        .mount(&server)
+        .await;
+
+    let anonymous = t.get_json::<Empty>("/thing", &[]).await;
+
+    // The retry after a successful refresh answers 401 carrying 8002.
+    let server = MockServer::start().await;
+    let t = transport(&server, 3);
+
+    t.set_tokens(Some(tokens("old")));
+
+    Mock::given(path("/thing"))
+        .and(header("authorization", "Bearer access-old"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+    Mock::given(path("/thing"))
+        .and(header("authorization", "Bearer access-new"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(json!({"Code": 8002, "Error": "password"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/auth/v4/refresh"))
+        .respond_with(refreshed())
+        .mount(&server)
+        .await;
+
+    let retried = t.get_json::<Empty>("/thing", &[]).await;
+
+    // The refresh endpoint itself answers 401 carrying 5001.
+    let server = MockServer::start().await;
+    let t = transport(&server, 3);
+
+    t.set_tokens(Some(tokens("old")));
+
+    Mock::given(path("/auth/v4/refresh"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(json!({"Code": 5001, "Error": "version"})),
+        )
+        .mount(&server)
+        .await;
+
+    let refresh = t.refresh_tokens().await;
+
+    assert!(
+        matches!(anonymous, Err(Error::SessionExpired)),
+        "got {anonymous:?}"
+    );
+    assert!(
+        matches!(retried, Err(Error::SessionExpired)),
+        "got {retried:?}"
+    );
+    assert!(
+        matches!(refresh, Err(Error::SessionExpired)),
+        "got {refresh:?}"
+    );
+}
+
+#[tokio::test]
+async fn explicit_code_zero_is_an_api_error() {
+    let server = MockServer::start().await;
+    let t = transport(&server, 3);
+
+    Mock::given(path("/thing"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"Code": 0, "Error": "rejected"})),
+        )
+        .mount(&server)
+        .await;
+
+    let got = t.get_json::<Empty>("/thing", &[]).await;
+
+    assert!(
+        matches!(
+            &got,
+            Err(Error::Api { status: 200, code: 0, message }) if message == "rejected"
+        ),
+        "got {got:?}"
+    );
+}
+
+#[tokio::test]
+async fn huge_retry_after_is_capped_without_overflow() {
+    let server = MockServer::start().await;
+    let mut config = TransportConfig::new("web-mail@test");
+
+    config.base_url = server.uri();
+    config.max_retries = 1;
+    config.max_retry_wait = Duration::ZERO;
+
+    let t = Arc::new(Transport::new(reqwest::Client::new(), config).expect("valid config"));
+
+    Mock::given(path("/thing"))
+        .respond_with(
+            ResponseTemplate::new(429).insert_header("Retry-After", u64::MAX.to_string().as_str()),
+        )
+        .mount(&server)
+        .await;
+
+    // The jitter is random and only some draws overflow, so try many times.
+    for attempt in 0..24 {
+        let task = Arc::clone(&t);
+        let joined = tokio::spawn(async move { task.get_json::<Empty>("/thing", &[]).await }).await;
+
+        assert!(joined.is_ok(), "request panicked on attempt {attempt}");
+
+        let got = joined.unwrap();
+
+        assert!(
+            matches!(
+                &got,
+                Err(Error::RateLimited { retry_after }) if *retry_after == Duration::from_secs(u64::MAX)
+            ),
+            "got {got:?}"
+        );
+    }
 }

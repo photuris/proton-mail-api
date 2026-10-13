@@ -7,6 +7,7 @@
 
 use std::fmt;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use rand::{Rng, RngCore};
@@ -14,6 +15,7 @@ use reqwest::header::HeaderValue;
 use reqwest::{Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::{Error, Result};
@@ -109,6 +111,12 @@ pub struct Transport {
     http: reqwest::Client,
     config: TransportConfig,
     tokens: RwLock<Option<AuthTokens>>,
+    /// Bumped by every token replacement; lets a request tell whether a
+    /// refresh happened while it was in flight.
+    generation: AtomicU64,
+    /// Held across the refresh exchange so concurrent 401s do not submit
+    /// the same refresh token twice.
+    refresh_lock: Mutex<()>,
 }
 
 impl Transport {
@@ -135,12 +143,17 @@ impl Transport {
             http,
             config,
             tokens: RwLock::new(None),
+            generation: AtomicU64::new(0),
+            refresh_lock: Mutex::new(()),
         })
     }
 
     /// Replaces the stored tokens; `None` signs the transport out locally.
     pub fn set_tokens(&self, tokens: Option<AuthTokens>) {
-        *self.tokens.write().unwrap_or_else(|e| e.into_inner()) = tokens;
+        let mut slot = self.tokens.write().unwrap_or_else(|e| e.into_inner());
+
+        *slot = tokens;
+        self.generation.fetch_add(1, Ordering::AcqRel);
     }
 
     /// A copy of the stored tokens, if any.
@@ -237,13 +250,21 @@ impl Transport {
     }
 
     /// Exchanges the stored refresh token for new tokens and stores them.
-    /// Does not itself refresh on 401.
+    /// Does not itself refresh on 401. Concurrent refreshes queue behind
+    /// one another.
     ///
     /// # Errors
     ///
     /// [`Error::SessionExpired`] when no tokens are stored or the server
     /// rejects the refresh token; otherwise as for any call.
     pub async fn refresh_tokens(&self) -> Result<()> {
+        let _guard = self.refresh_lock.lock().await;
+
+        self.refresh_locked().await
+    }
+
+    /// The refresh exchange itself; the caller holds `refresh_lock`.
+    async fn refresh_locked(&self) -> Result<()> {
         let Some(old) = self.tokens() else {
             return Err(Error::SessionExpired);
         };
@@ -319,10 +340,21 @@ impl Transport {
         build: impl Fn() -> RequestBuilder,
         auto_refresh: bool,
     ) -> Result<Buffered> {
+        // Read before `build()` so the request's tokens are never older than
+        // this generation.
+        let generation = self.generation.load(Ordering::Acquire);
         let first = self.send_once(build()).await?;
 
         if first.status == 401 && auto_refresh && self.tokens().is_some() {
-            self.refresh_tokens().await?;
+            {
+                let _guard = self.refresh_lock.lock().await;
+
+                // Another request refreshed while this one was in flight or
+                // queued: retry with its tokens instead of rotating again.
+                if self.generation.load(Ordering::Acquire) == generation {
+                    self.refresh_locked().await?;
+                }
+            }
 
             return classify(self.send_once(build()).await?);
         }
@@ -367,7 +399,12 @@ impl Transport {
 
             let jitter = Duration::from_millis(rand::thread_rng().gen_range(0..=JITTER_MS));
 
-            tokio::time::sleep((retry_after + jitter).min(self.config.max_retry_wait)).await;
+            tokio::time::sleep(
+                retry_after
+                    .saturating_add(jitter)
+                    .min(self.config.max_retry_wait),
+            )
+            .await;
         }
     }
 }
@@ -401,21 +438,36 @@ fn verification_error(body: &[u8]) -> Option<Error> {
     }
 }
 
-/// Turns a non-success response into its typed error. A 2xx whose `Code`
-/// is absent, 1000 or 1001 passes through.
-fn classify(buffered: Buffered) -> Result<Buffered> {
-    let envelope: ApiErrorBody = serde_json::from_slice(&buffered.body).unwrap_or_default();
-    let code = envelope.code;
+/// The two envelope fields `classify` needs. Unlike [`ApiErrorBody`], it
+/// keeps an absent `Code` apart from an explicit `Code: 0`.
+#[derive(Default, Deserialize)]
+struct Envelope {
+    #[serde(rename = "Code")]
+    code: Option<i64>,
+    #[serde(rename = "Error")]
+    error: Option<String>,
+}
 
-    if (200..300).contains(&buffered.status) && matches!(code, 0 | 1000 | 1001) {
+/// Turns a non-success response into its typed error. A 2xx whose `Code`
+/// is absent, 1000 or 1001 passes through. HTTP 401 outranks every code
+/// mapping here (verification codes were handled earlier).
+fn classify(buffered: Buffered) -> Result<Buffered> {
+    let envelope: Envelope = serde_json::from_slice(&buffered.body).unwrap_or_default();
+
+    if (200..300).contains(&buffered.status) && matches!(envelope.code, None | Some(1000 | 1001)) {
         return Ok(buffered);
     }
+
+    if buffered.status == 401 {
+        return Err(Error::SessionExpired);
+    }
+
+    let code = envelope.code.unwrap_or(0);
 
     Err(match code {
         5001 | 5003 => Error::AppVersionRejected,
         8002 => Error::WrongPassword,
         10013 => Error::SessionExpired,
-        _ if buffered.status == 401 => Error::SessionExpired,
         _ => Error::Api {
             status: buffered.status,
             code,

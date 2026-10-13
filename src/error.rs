@@ -79,7 +79,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl fmt::Debug for Error {
     /// Prints like a derived `Debug`, except that `Api::message` and the
-    /// verification token print as `"<redacted>"`.
+    /// verification token print as `"<redacted>"` and the verification
+    /// methods print only as a count, since they are server text.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Api { status, code, .. } => f
@@ -90,7 +91,7 @@ impl fmt::Debug for Error {
                 .finish(),
             Self::HumanVerificationRequired { methods, .. } => f
                 .debug_struct("HumanVerificationRequired")
-                .field("methods", methods)
+                .field("methods", &format_args!("<{} items>", methods.len()))
                 .field("token", &"<redacted>")
                 .finish(),
             Self::DeviceVerificationRequired => f.write_str("DeviceVerificationRequired"),
