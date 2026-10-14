@@ -87,6 +87,24 @@ pub enum Error {
     /// A Proton recipient has no key that can encrypt.
     #[error("recipient has no usable encryption key")]
     RecipientKeyUnusable,
+    /// The server answered the final send with a definite error; the draft
+    /// was created and is kept. Inspect `source` for the reason.
+    #[error("send rejected; draft {draft_id} kept")]
+    SendRejected {
+        /// Id of the draft that was created and not sent.
+        draft_id: String,
+        /// The error the send request returned.
+        #[source]
+        source: Box<Error>,
+    },
+    /// The final send was dispatched but its outcome is unknown (no
+    /// response, or a response that could not be read). The message may
+    /// have been sent: do not send again; check `draft_id` first.
+    #[error("send outcome unknown for draft {draft_id}; do not resend")]
+    SendOutcomeUnknown {
+        /// Id of the draft that was being sent.
+        draft_id: String,
+    },
 }
 
 /// Result alias used across the crate.
@@ -145,6 +163,15 @@ impl fmt::Debug for Error {
             Self::NoRecipients => f.write_str("NoRecipients"),
             Self::UnknownSender => f.write_str("UnknownSender"),
             Self::RecipientKeyUnusable => f.write_str("RecipientKeyUnusable"),
+            Self::SendRejected { draft_id, source } => f
+                .debug_struct("SendRejected")
+                .field("draft_id", draft_id)
+                .field("source", source)
+                .finish(),
+            Self::SendOutcomeUnknown { draft_id } => f
+                .debug_struct("SendOutcomeUnknown")
+                .field("draft_id", draft_id)
+                .finish(),
         }
     }
 }
