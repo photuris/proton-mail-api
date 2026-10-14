@@ -204,6 +204,7 @@ impl Transport {
                     }
                 },
                 true,
+                true,
             )
             .await?;
 
@@ -221,6 +222,32 @@ impl Transport {
         body: &B,
     ) -> Result<T> {
         self.json_call(Method::POST, path, body).await
+    }
+
+    /// `POST path` with a JSON `body`, like [`post_json`](Self::post_json),
+    /// but never waits or repeats on 429/503: a 429 returns
+    /// [`Error::RateLimited`] at once and a 503 returns [`Error::Api`] with
+    /// status 503. Use it for a request that must not be sent twice. A 401
+    /// still refreshes the tokens and repeats once, because the server
+    /// rejects it before processing.
+    ///
+    /// # Errors
+    ///
+    /// Any [`Error`] the response classifies to; see the module docs.
+    pub async fn post_json_once<B: Serialize + Sync, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let buffered = self
+            .send(
+                || self.builder(Method::POST, path, true).json(body),
+                true,
+                false,
+            )
+            .await?;
+
+        decode(&buffered.body)
     }
 
     /// `PUT path` with a JSON `body`, decoding the success body into `T`.
@@ -243,7 +270,7 @@ impl Transport {
     /// Any [`Error`] the response classifies to; see the module docs.
     pub async fn delete_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let buffered = self
-            .send(|| self.builder(Method::DELETE, path, true), true)
+            .send(|| self.builder(Method::DELETE, path, true), true, true)
             .await?;
 
         decode(&buffered.body)
@@ -256,7 +283,7 @@ impl Transport {
     /// Any [`Error`] the response classifies to; see the module docs.
     pub async fn get_bytes(&self, path: &str) -> Result<Vec<u8>> {
         let buffered = self
-            .send(|| self.builder(Method::GET, path, true), true)
+            .send(|| self.builder(Method::GET, path, true), true, true)
             .await?;
 
         Ok(buffered.body)
@@ -298,7 +325,7 @@ impl Transport {
             .builder(Method::POST, "/auth/v4/refresh", false)
             .header("x-pm-uid", &old.uid)
             .json(&body);
-        let buffered = self.send_once(req).await?;
+        let buffered = self.send_once(req, true).await?;
 
         if matches!(buffered.status, 400 | 422) {
             return Err(Error::SessionExpired);
@@ -324,7 +351,11 @@ impl Transport {
         body: &B,
     ) -> Result<T> {
         let buffered = self
-            .send(|| self.builder(method.clone(), path, true).json(body), true)
+            .send(
+                || self.builder(method.clone(), path, true).json(body),
+                true,
+                true,
+            )
             .await?;
 
         decode(&buffered.body)
@@ -353,11 +384,12 @@ impl Transport {
         &self,
         build: impl Fn() -> RequestBuilder,
         auto_refresh: bool,
+        backoff: bool,
     ) -> Result<Buffered> {
         // Read before `build()` so the request's tokens are never older than
         // this generation.
         let generation = self.generation.load(Ordering::Acquire);
-        let first = self.send_once(build()).await?;
+        let first = self.send_once(build(), backoff).await?;
 
         if first.status == 401 && auto_refresh && self.tokens().is_some() {
             {
@@ -370,16 +402,18 @@ impl Transport {
                 }
             }
 
-            return classify(self.send_once(build()).await?);
+            return classify(self.send_once(build(), backoff).await?);
         }
 
         classify(first)
     }
 
-    /// Sends one request, retrying 429/503 within the configured bounds.
-    /// Returns every other response as it came, except that the bodies
-    /// `early_error` maps become errors here so they are never retried.
-    async fn send_once(&self, req: RequestBuilder) -> Result<Buffered> {
+    /// Sends one request, retrying 429/503 within the configured bounds when
+    /// `backoff` is set. Without it a 429 is an error at once and a 503 comes
+    /// back as it is. Returns every other response as it came, except that
+    /// the bodies `early_error` maps become errors here so they are never
+    /// retried.
+    async fn send_once(&self, req: RequestBuilder, backoff: bool) -> Result<Buffered> {
         let mut retries = 0;
 
         loop {
@@ -402,6 +436,14 @@ impl Transport {
             }
 
             if !matches!(status, 429 | 503) {
+                return Ok(Buffered { status, body });
+            }
+
+            if !backoff {
+                if status == 429 {
+                    return Err(Error::RateLimited { retry_after });
+                }
+
                 return Ok(Buffered { status, body });
             }
 
