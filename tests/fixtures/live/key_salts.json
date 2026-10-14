@@ -1,0 +1,17 @@
+{
+  "Code": 1000,
+  "KeySalts": [
+    {
+      "ID": "id-2",
+      "KeySalt": "<scrubbed>"
+    },
+    {
+      "ID": "id-10",
+      "KeySalt": null
+    },
+    {
+      "ID": "id-5",
+      "KeySalt": null
+    }
+  ]
+}

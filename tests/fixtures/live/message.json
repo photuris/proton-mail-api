@@ -1,0 +1,79 @@
+{
+  "Code": 1000,
+  "Message": {
+    "AddressID": "id-4",
+    "AttachmentInfo": {},
+    "Attachments": [],
+    "AttachmentsMetadata": [],
+    "BCCList": [],
+    "BimiSelector": null,
+    "Body": "<scrubbed>",
+    "CCList": [],
+    "CategoryID": "id-16",
+    "ConversationID": "id-17",
+    "DisplaySenderImage": 0,
+    "DisplaySnoozedReminder": false,
+    "ExpirationTime": 1700000000,
+    "ExternalID": "id-18",
+    "Flags": 8430593,
+    "Header": "<scrubbed>",
+    "ID": "id-19",
+    "IsEncrypted": 0,
+    "IsForwarded": 0,
+    "IsProton": 0,
+    "IsReplied": 0,
+    "IsRepliedAll": 0,
+    "LabelIDs": [
+      "0",
+      "5",
+      "15"
+    ],
+    "MIMEType": "text/html",
+    "NewsletterSubscriptionID": "id-20",
+    "NumAttachments": 0,
+    "Order": 0,
+    "ParsedHeaders": {
+      "X-Scrubbed": "<scrubbed>"
+    },
+    "ReplyTo": {
+      "Address": "user10@example.invalid",
+      "Group": "",
+      "Name": "<scrubbed>"
+    },
+    "ReplyTos": [
+      {
+        "Address": "user10@example.invalid",
+        "Group": "",
+        "Name": "<scrubbed>"
+      }
+    ],
+    "Sender": {
+      "Address": "user4@example.invalid",
+      "BimiSelector": null,
+      "DisplaySenderImage": 0,
+      "IsProton": 0,
+      "IsSimpleLogin": 0,
+      "Name": "<scrubbed>"
+    },
+    "SenderAddress": "<scrubbed>",
+    "SenderName": "<scrubbed>",
+    "Size": 0,
+    "SnoozeTime": 1700000000,
+    "SpamScore": 0,
+    "Subject": "<scrubbed>",
+    "Time": 1700000000,
+    "ToList": [
+      {
+        "Address": "user5@example.invalid",
+        "Group": "",
+        "IsProton": 0,
+        "Name": ""
+      }
+    ],
+    "Type": 0,
+    "Unread": 1,
+    "UnsubscribeMethods": {
+      "OneClick": "<scrubbed>"
+    }
+  }
+}

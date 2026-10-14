@@ -1,0 +1,148 @@
+{
+  "Addresses": [
+    {
+      "CatchAll": false,
+      "ConfirmationState": 0,
+      "DisplayName": "<scrubbed>",
+      "DomainID": "id-3",
+      "Email": "user1@example.invalid",
+      "Flags": 0,
+      "HasKeys": 0,
+      "ID": "id-4",
+      "Keys": [
+        {
+          "Activation": null,
+          "Active": 1,
+          "Fingerprint": "<scrubbed>",
+          "Fingerprints": [
+            "<scrubbed>",
+            "<scrubbed>"
+          ],
+          "Flags": 3,
+          "ID": "id-5",
+          "Primary": 1,
+          "PrivateKey": "<scrubbed>",
+          "PublicKey": "<scrubbed>",
+          "Signature": "<scrubbed>",
+          "Token": "<scrubbed>",
+          "Version": 3
+        }
+      ],
+      "Order": 1,
+      "Permissions": 0,
+      "Priority": 0,
+      "ProtonMX": true,
+      "Receive": 1,
+      "Send": 1,
+      "Signature": "",
+      "SignedKeyList": {
+        "Data": "<scrubbed>",
+        "ExpectedMinEpochID": null,
+        "MaxEpochID": 0,
+        "MinEpochID": 0,
+        "ObsolescenceToken": null,
+        "Revision": 0,
+        "Signature": "<scrubbed>"
+      },
+      "Status": 1,
+      "Type": 1
+    },
+    {
+      "CatchAll": false,
+      "ConfirmationState": 0,
+      "DisplayName": "<scrubbed>",
+      "DomainID": "id-6",
+      "Email": "user2@example.invalid",
+      "Flags": 0,
+      "HasKeys": 0,
+      "ID": "id-7",
+      "Keys": [
+        {
+          "Activation": null,
+          "Active": 1,
+          "Fingerprint": "<scrubbed>",
+          "Fingerprints": [
+            "<scrubbed>",
+            "<scrubbed>"
+          ],
+          "Flags": 3,
+          "ID": "id-8",
+          "Primary": 1,
+          "PrivateKey": "<scrubbed>",
+          "PublicKey": "<scrubbed>",
+          "Signature": "<scrubbed>",
+          "Token": "<scrubbed>",
+          "Version": 3
+        }
+      ],
+      "Order": 3,
+      "Permissions": 0,
+      "Priority": 0,
+      "ProtonMX": true,
+      "Receive": 1,
+      "Send": 1,
+      "Signature": "",
+      "SignedKeyList": {
+        "Data": "<scrubbed>",
+        "ExpectedMinEpochID": null,
+        "MaxEpochID": 0,
+        "MinEpochID": 0,
+        "ObsolescenceToken": null,
+        "Revision": 0,
+        "Signature": "<scrubbed>"
+      },
+      "Status": 1,
+      "Type": 4
+    },
+    {
+      "CatchAll": false,
+      "ConfirmationState": 0,
+      "DisplayName": "<scrubbed>",
+      "DomainID": null,
+      "Email": "user3@example.invalid",
+      "Flags": 48,
+      "HasKeys": 0,
+      "ID": "id-9",
+      "Keys": [
+        {
+          "Activation": null,
+          "Active": 1,
+          "Fingerprint": "<scrubbed>",
+          "Fingerprints": [
+            "<scrubbed>",
+            "<scrubbed>"
+          ],
+          "Flags": 15,
+          "ID": "id-10",
+          "Primary": 1,
+          "PrivateKey": "<scrubbed>",
+          "PublicKey": "<scrubbed>",
+          "Signature": "<scrubbed>",
+          "Token": "<scrubbed>",
+          "Version": 3
+        }
+      ],
+      "Order": 2,
+      "Permissions": 0,
+      "Priority": 0,
+      "ProtonMX": true,
+      "Receive": 0,
+      "Send": 0,
+      "Signature": "",
+      "SignedKeyList": {
+        "Data": "<scrubbed>",
+        "ExpectedMinEpochID": null,
+        "MaxEpochID": 0,
+        "MinEpochID": 0,
+        "ObsolescenceToken": null,
+        "Revision": 0,
+        "Signature": "<scrubbed>"
+      },
+      "Status": 1,
+      "Type": 5
+    }
+  ],
+  "Code": 1000,
+  "SignedAddressList": [],
+  "Total": 0
+}

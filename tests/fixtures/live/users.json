@@ -1,0 +1,67 @@
+{
+  "Code": 1000,
+  "User": {
+    "AccountRecovery": null,
+    "Billed": 0,
+    "ChargebeeUser": 0,
+    "ChargebeeUserExists": 0,
+    "CreateTime": 1700000000,
+    "Credit": 0,
+    "Currency": "<scrubbed>",
+    "Delinquent": 0,
+    "DisplayName": "<scrubbed>",
+    "Email": "user1@example.invalid",
+    "Flags": {
+      "k1": false,
+      "k10": false,
+      "k11": false,
+      "k12": false,
+      "k2": false,
+      "k3": false,
+      "k4": false,
+      "k5": false,
+      "k6": false,
+      "k7": true,
+      "k8": false,
+      "k9": false,
+      "protected": false,
+      "sso": false
+    },
+    "ForbiddenProducts": [],
+    "HasMultipleSubscriptions": false,
+    "ID": "id-1",
+    "Keys": [
+      {
+        "Active": 1,
+        "Fingerprint": "<scrubbed>",
+        "ID": "id-2",
+        "Primary": 1,
+        "PrivateKey": "<scrubbed>",
+        "RecoverySecret": "<scrubbed>",
+        "RecoverySecretSignature": "<scrubbed>",
+        "Version": 3
+      }
+    ],
+    "MaxSpace": 0,
+    "MaxUpload": 0,
+    "MnemonicStatus": 0,
+    "Name": "<scrubbed>",
+    "NumAI": 0,
+    "NumLumo": 0,
+    "Private": 0,
+    "ProductUsedSpace": {
+      "Calendar": 0,
+      "Contact": 0,
+      "Drive": 0,
+      "Lumo": 0,
+      "Mail": 0,
+      "Pass": 0
+    },
+    "Role": 0,
+    "Services": 0,
+    "Subscribed": 0,
+    "ToMigrate": 0,
+    "Type": 1,
+    "UsedSpace": 0
+  }
+}

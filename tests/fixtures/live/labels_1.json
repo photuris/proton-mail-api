@@ -1,0 +1,44 @@
+{
+  "Code": 1000,
+  "Labels": [
+    {
+      "Color": "#F78400",
+      "Display": 0,
+      "Expanded": 0,
+      "ID": "id-11",
+      "LastUnseenMessageEventID": null,
+      "Name": "<scrubbed>",
+      "Notify": 0,
+      "Order": 2,
+      "Path": "<scrubbed>",
+      "Sticky": 0,
+      "Type": 1
+    },
+    {
+      "Color": "#3CBB3A",
+      "Display": 0,
+      "Expanded": 0,
+      "ID": "id-12",
+      "LastUnseenMessageEventID": null,
+      "Name": "<scrubbed>",
+      "Notify": 0,
+      "Order": 3,
+      "Path": "<scrubbed>",
+      "Sticky": 0,
+      "Type": 1
+    },
+    {
+      "Color": "#0a77a6",
+      "Display": 0,
+      "Expanded": 0,
+      "ID": "id-13",
+      "LastUnseenMessageEventID": null,
+      "Name": "<scrubbed>",
+      "Notify": 0,
+      "Order": 4,
+      "Path": "<scrubbed>",
+      "Sticky": 0,
+      "Type": 1
+    }
+  ]
+}
