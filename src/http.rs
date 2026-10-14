@@ -409,8 +409,8 @@ impl Transport {
     }
 
     /// Sends one request, retrying 429/503 within the configured bounds when
-    /// `backoff` is set. Without it a 429 is an error at once and a 503 comes
-    /// back as it is. Returns every other response as it came, except that
+    /// `backoff` is set. Without it a 429 is an error at once and a 503 is
+    /// [`Error::Api`] with its envelope code. Returns every other response as it came, except that
     /// the bodies `early_error` maps become errors here so they are never
     /// retried.
     async fn send_once(&self, req: RequestBuilder, backoff: bool) -> Result<Buffered> {
@@ -442,6 +442,18 @@ impl Transport {
             if !backoff {
                 if status == 429 {
                     return Err(Error::RateLimited { retry_after });
+                }
+
+                // Whatever its code, a 503 is not a definite refusal: it
+                // never takes one of `classify`'s typed mappings.
+                if status == 503 {
+                    let envelope: Envelope = serde_json::from_slice(&body).unwrap_or_default();
+
+                    return Err(Error::Api {
+                        status,
+                        code: envelope.code.unwrap_or(0),
+                        message: envelope.error.unwrap_or_default(),
+                    });
                 }
 
                 return Ok(Buffered { status, body });

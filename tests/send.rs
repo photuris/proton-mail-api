@@ -138,18 +138,28 @@ fn message(to: &[&str]) -> OutgoingMessage {
     }
 }
 
-/// Serves the key lookup of `email`.
-async fn mount_lookup(server: &MockServer, email: &str, recipient_type: u32, keys: Value) {
+/// Serves the key lookup of `email` with the reply `body`.
+async fn mount_lookup_body(server: &MockServer, email: &str, body: Value) {
     Mock::given(method("GET"))
         .and(path("/core/v4/keys"))
         .and(query_param("Email", email))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(server)
+        .await;
+}
+
+/// Serves the key lookup of `email`.
+async fn mount_lookup(server: &MockServer, email: &str, recipient_type: u32, keys: Value) {
+    mount_lookup_body(
+        server,
+        email,
+        json!({
             "Code": 1000,
             "Keys": keys,
             "RecipientType": recipient_type,
-        })))
-        .mount(server)
-        .await;
+        }),
+    )
+    .await;
 }
 
 /// Serves the lookup of an external `email`.
@@ -431,15 +441,29 @@ async fn recipient_key_picks_first_usable_key_and_handles_external() {
 
 #[tokio::test]
 async fn internal_without_usable_key_fails_before_draft() {
+    let usable = armored_public(&usable_key());
     let cases = [
-        json!([{ "Flags": 1, "PublicKey": armored_public(&usable_key()) }]),
-        json!([{ "Flags": 3, "PublicKey": armored_public(&signing_only_key()) }]),
+        (
+            json!({ "Code": 1000, "RecipientType": 1,
+                "Keys": [{ "Flags": 1, "PublicKey": usable }] }),
+            false,
+        ),
+        (
+            json!({ "Code": 1000, "RecipientType": 1,
+                "Keys": [{ "Flags": 3, "PublicKey": armored_public(&signing_only_key()) }] }),
+            false,
+        ),
+        // No `RecipientType`: not a recipient type, so never external.
+        (
+            json!({ "Code": 1000, "Keys": [{ "Flags": 3, "PublicKey": usable }] }),
+            true,
+        ),
     ];
 
-    for keys_json in cases {
+    for (i, (reply, malformed)) in cases.into_iter().enumerate() {
         let server = MockServer::start().await;
 
-        mount_lookup(&server, "p@proton.test", 1, keys_json).await;
+        mount_lookup_body(&server, "p@proton.test", reply).await;
         mount_flow(&server, "draft-1").await;
 
         let result = session(&server, 0)
@@ -447,8 +471,12 @@ async fn internal_without_usable_key_fails_before_draft() {
             .await;
 
         assert!(
-            matches!(result, Err(Error::RecipientKeyUnusable)),
-            "an internal recipient without a usable key must fail"
+            if malformed {
+                matches!(result, Err(Error::InvalidResponse))
+            } else {
+                matches!(result, Err(Error::RecipientKeyUnusable))
+            },
+            "case {i}: the lookup must fail before a draft"
         );
         assert_eq!(request_lines(&server).await, ["GET /core/v4/keys"]);
     }
@@ -595,6 +623,10 @@ async fn send_with_unreadable_outcome_is_unknown() {
         ResponseTemplate::new(503)
             .insert_header("Retry-After", "0")
             .set_body_json(json!({ "Code": 2500, "Error": "unavailable" })),
+        // A 503 is never a definite refusal, whatever its code.
+        ResponseTemplate::new(503)
+            .insert_header("Retry-After", "0")
+            .set_body_json(json!({ "Code": 10013, "Error": "SERVERMARKER" })),
     ];
 
     for (i, response) in table.into_iter().enumerate() {

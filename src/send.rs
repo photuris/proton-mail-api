@@ -103,7 +103,7 @@ impl fmt::Debug for OutgoingMessage {
 struct KeysReply {
     #[serde(rename = "Keys", default)]
     keys: Option<Vec<LookupKey>>,
-    #[serde(rename = "RecipientType", default)]
+    #[serde(rename = "RecipientType")]
     recipient_type: i64,
 }
 
@@ -248,6 +248,9 @@ impl Session {
             }
         }
 
+        let body = encrypt_draft_body(sender, &msg.body)?;
+        let package = build_package(sender, &msg.body, msg.body_type, &recipient_keys)?;
+
         let draft = DraftRequest {
             message: DraftMessage {
                 subject: &msg.subject,
@@ -255,7 +258,7 @@ impl Session {
                 to_list: &msg.to,
                 cc_list: &msg.cc,
                 bcc_list: &msg.bcc,
-                body: encrypt_draft_body(sender, &msg.body)?,
+                body,
                 mime_type: msg.body_type.mime_type(),
                 address_id: &sender.address_id,
                 unread: ApiBool(false),
@@ -270,7 +273,6 @@ impl Session {
             .await?;
         let draft_id = created.message.id;
 
-        let package = build_package(sender, &msg.body, msg.body_type, &recipient_keys)?;
         let sent: SentReply = self
             .transport()
             .post_json_once(
