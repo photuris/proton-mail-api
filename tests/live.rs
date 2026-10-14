@@ -7,8 +7,12 @@
 //! the default `User-Agent`). Failure messages name the step and the
 //! crate's error text; they never carry message content, tokens,
 //! passwords or key text.
+//!
+//! The test flips and restores the newest Inbox message's read state and moves
+//! it to Archive and back, best effort.
 
 use std::env;
+use std::time::Duration;
 
 use proton_mail_api::error::Result as ApiResult;
 use proton_mail_api::labels::system;
@@ -16,6 +20,10 @@ use proton_mail_api::messages::MessageQuery;
 use proton_mail_api::session::{Client, Session};
 
 type Outcome = Result<(), String>;
+
+/// How often the events poll asks, and how long it waits between asks.
+const EVENT_POLLS: u32 = 3;
+const EVENT_POLL_WAIT: Duration = Duration::from_secs(2);
 
 /// A variable that is set and not empty.
 fn var(name: &str) -> Option<String> {
@@ -43,6 +51,112 @@ fn expect(results: &mut Vec<Outcome>, ok: bool, failure: &str) {
     results.push(if ok { Ok(()) } else { Err(failure.to_string()) });
 }
 
+/// Sets the unread flag of one message.
+async fn set_unread(session: &Session, id: &str, unread: bool) -> ApiResult<()> {
+    let ids = [id.to_string()];
+    if unread {
+        session.mark_unread(&ids).await
+    } else {
+        session.mark_read(&ids).await
+    }
+}
+
+/// Flips the read state and restores it, then moves the message to Archive
+/// and back. Returns whether any call changed the mailbox. A restore that is
+/// not confirmed is reported and stops further changes.
+async fn triage(session: &Session, id: &str, was_unread: bool, results: &mut Vec<Outcome>) -> bool {
+    let mut changed = false;
+    let ids = [id.to_string()];
+
+    let flipped = take(
+        results,
+        "flip read state",
+        set_unread(session, id, !was_unread).await,
+    );
+    changed |= flipped.is_some();
+    if flipped.is_some()
+        && let Some(message) = take(results, "refetch message", session.message(id).await)
+    {
+        expect(
+            results,
+            message.meta.unread.0 == !was_unread,
+            "read state did not change",
+        );
+    }
+
+    let restored = take(
+        results,
+        "restore read state",
+        set_unread(session, id, was_unread).await,
+    );
+    changed |= restored.is_some();
+    let confirmed = restored.is_some()
+        && take(results, "refetch message", session.message(id).await)
+            .is_some_and(|message| message.meta.unread.0 == was_unread);
+    if !confirmed {
+        results.push(Err("read state was not restored".to_string()));
+        results.push(Err(
+            "skipped archive round-trip after a failed restore".to_string()
+        ));
+        return changed;
+    }
+
+    let moved = take(
+        results,
+        "move to archive",
+        session.move_to(&ids, system::ARCHIVE).await,
+    );
+    changed |= moved.is_some();
+    if moved.is_some()
+        && let Some(message) = take(results, "refetch message", session.message(id).await)
+    {
+        let labels = &message.meta.label_ids;
+        expect(
+            results,
+            labels.iter().any(|l| l == system::ARCHIVE)
+                && !labels.iter().any(|l| l == system::INBOX),
+            "message did not move to Archive",
+        );
+    }
+
+    let back = take(
+        results,
+        "move back to inbox",
+        session.move_to(&ids, system::INBOX).await,
+    );
+    changed |= back.is_some();
+    let home = take(results, "refetch message", session.message(id).await).is_some_and(|message| {
+        let labels = &message.meta.label_ids;
+        labels.iter().any(|l| l == system::INBOX) && !labels.iter().any(|l| l == system::ARCHIVE)
+    });
+    expect(results, home, "message did not move back to Inbox");
+
+    changed
+}
+
+/// Asks the events feed after `before` until a batch names message `id`.
+/// An error ends the poll at once.
+async fn poll_events(session: &Session, before: &str, id: &str, results: &mut Vec<Outcome>) {
+    for attempt in 0..EVENT_POLLS {
+        let Some(batch) = take(results, "read events", session.events(before).await) else {
+            return;
+        };
+        if batch
+            .events
+            .iter()
+            .any(|event| event.messages.iter().any(|m| m.id == id))
+        {
+            return;
+        }
+        if attempt + 1 < EVENT_POLLS {
+            tokio::time::sleep(EVENT_POLL_WAIT).await;
+        }
+    }
+    results.push(Err(
+        "events feed did not report the triage changes".to_string()
+    ));
+}
+
 /// Everything after login. Steps that need an earlier result are skipped
 /// when that result is missing; the earlier failure is already recorded.
 async fn read_steps(session: &Session, mailbox_password: &str, results: &mut Vec<Outcome>) {
@@ -61,6 +175,13 @@ async fn read_steps(session: &Session, mailbox_password: &str, results: &mut Vec
         ..Default::default()
     };
     let page = take(results, "list inbox", session.list_messages(&query).await);
+
+    let before = take(results, "latest event id", session.latest_event_id().await).and_then(|id| {
+        let known = !id.is_empty();
+        expect(results, known, "latest event id is empty");
+        known.then_some(id)
+    });
+
     if let Some(page) = page {
         match page.messages.first() {
             None => results.push(Err("live test needs at least one Inbox message".to_string())),
@@ -82,12 +203,13 @@ async fn read_steps(session: &Session, mailbox_password: &str, results: &mut Vec
                         expect(results, !bytes.is_empty(), "decrypted attachment is empty");
                     }
                 }
+
+                let changed = triage(session, &newest.id, newest.unread.0, results).await;
+                if changed && let Some(before) = &before {
+                    poll_events(session, before, &newest.id, results).await;
+                }
             }
         }
-    }
-
-    if let Some(id) = take(results, "latest event id", session.latest_event_id().await) {
-        expect(results, !id.is_empty(), "latest event id is empty");
     }
 }
 
@@ -154,7 +276,6 @@ async fn live_end_to_end() {
         take(&mut results, "logout", session.logout().await);
     }
 
-    if let Some(message) = results.into_iter().find_map(Result::err) {
-        panic!("{message}");
-    }
+    let failures: Vec<String> = results.into_iter().filter_map(Result::err).collect();
+    assert!(failures.is_empty(), "{}", failures.join("; "));
 }
