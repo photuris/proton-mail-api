@@ -57,7 +57,7 @@ plain message with the text attachment to an address outside Proton. All stay
 in place; the test deletes nothing. It does nothing
 unless `PROTON_LIVE_SEND=1`; CI never sets it. It uses the same variables as
 the live test, plus `PROTON_LIVE_SEND_EXTERNAL`, an optional address outside
-Proton that receives the second message. Its success is the only check; read
+Proton that receives the optional external message. Its success is the only check; read
 the message yourself.
 
 ```sh
@@ -80,8 +80,9 @@ attachments, is `SendRejected` with the draft id: the message was not sent,
 and the draft is kept and may hold some of the attachments. A lost upload
 response is also `SendRejected`, because the final send was never made.
 
-- `SendRejected` means Proton refused the send before processing it. The
-  message was not sent and the draft is kept.
+- `SendRejected` means the message was not sent: Proton refused the final
+  send before processing it, or an attachment step failed after the draft was
+  created. The draft is kept and may hold some of the attachments.
 - `SendOutcomeUnknown` means the message may have been sent or may still be
   sent. Never send it again. Once delivery is done, the draft's `SENT` flag
   confirms it; its absence proves nothing.

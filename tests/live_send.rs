@@ -163,8 +163,8 @@ async fn check_attachments(
 ) {
     expect(
         results,
-        received.attachments.len() == sent.len(),
-        "received attachment missing",
+        received.attachments.len() <= sent.len(),
+        "received message has extra attachments",
     );
 
     for want in sent {
@@ -173,7 +173,9 @@ async fn check_attachments(
             .iter()
             .find(|a| a.name == want.filename)
         else {
-            results.push(Err("received attachment missing".to_string()));
+            results.push(Err(
+                "download attachment: received attachment missing".to_string()
+            ));
             continue;
         };
 
