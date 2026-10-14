@@ -475,9 +475,21 @@ async fn send_with_attachment_uploads_after_draft_then_sends_keys() {
     let server = MockServer::start().await;
     let sender = usable_key();
     let alice = usable_key();
+    // An attachment the draft lists although nothing was forwarded.
+    let listed = encrypt_attachment(&address_key(SENDER, true, sender.clone()), "x.bin", DATA)
+        .expect("encrypts");
 
     mount_internal(&server, "alice@proton.test", &alice).await;
-    mount_draft(&server, "draft-1").await;
+    mount_draft_with(
+        &server,
+        "draft-1",
+        json!({ "Attachments": [{
+            "ID": "listed-1",
+            "KeyPackets": B64.encode(&listed.key_packets),
+            "Signature": B64.encode(&listed.signature),
+        }] }),
+    )
+    .await;
     mount_upload(&server, "att-1").await;
     mount_send(&server, "draft-1").await;
 
@@ -542,6 +554,18 @@ async fn send_with_attachment_uploads_after_draft_then_sends_keys() {
             &alice
         ),
         "the recipient decrypts the uploaded data packet"
+    );
+    assert!(
+        opens_to_data(
+            &unb64(
+                entry["AttachmentKeyPackets"]["listed-1"]
+                    .as_str()
+                    .expect("key packet of the listed attachment")
+            ),
+            &listed.data_packet,
+            &alice
+        ),
+        "the recipient decrypts an attachment the draft lists"
     );
     assert!(package.get("AttachmentKeys").is_none());
 }
@@ -1044,16 +1068,20 @@ async fn draft_attachment_copies_missing_or_bad_are_send_rejected() {
         DATA,
     )
     .expect("encrypts");
-    let table: Vec<(&str, Value, SourceCheck)> = vec![
-        ("omitted", json!({}), |e| {
+    let empty_packets = json!({ "Attachments": [{
+        "ID": "copy-1",
+        "KeyPackets": "",
+        "Signature": "",
+    }] });
+    // (row, draft reply fields, whether the message forwards, source check)
+    let table: Vec<(&str, Value, bool, SourceCheck)> = vec![
+        ("omitted", json!({}), true, |e| {
             matches!(e, Error::InvalidResponse)
         }),
-        (
-            "empty key packets",
-            json!({ "Attachments": [{ "ID": "copy-1", "KeyPackets": "", "Signature": "" }] }),
-            |e| matches!(e, Error::InvalidResponse),
-        ),
-        ("not a list", json!({ "Attachments": "oops" }), |e| {
+        ("empty key packets", empty_packets.clone(), true, |e| {
+            matches!(e, Error::InvalidResponse)
+        }),
+        ("not a list", json!({ "Attachments": "oops" }), true, |e| {
             matches!(e, Error::InvalidResponse)
         }),
         (
@@ -1063,14 +1091,30 @@ async fn draft_attachment_copies_missing_or_bad_are_send_rejected() {
                 "KeyPackets": B64.encode(&unrelated.key_packets),
                 "Signature": "",
             }] }),
+            true,
             |e| matches!(e, Error::Crypto(_)),
         ),
-        ("fewer than forwarded", json!({ "Attachments": [] }), |e| {
-            matches!(e, Error::InvalidResponse)
-        }),
+        (
+            "fewer than forwarded",
+            json!({ "Attachments": [] }),
+            true,
+            |e| matches!(e, Error::InvalidResponse),
+        ),
+        (
+            "new message, not a list",
+            json!({ "Attachments": "oops" }),
+            false,
+            |e| matches!(e, Error::InvalidResponse),
+        ),
+        (
+            "new message, empty key packets",
+            empty_packets,
+            false,
+            |e| matches!(e, Error::InvalidResponse),
+        ),
     ];
 
-    for (name, extra, check) in table {
+    for (name, extra, forwarding, check) in table {
         let server = MockServer::start().await;
         let (attachment, _) = parent_attachment(&keys.address_keys[0]);
 
@@ -1081,7 +1125,9 @@ async fn draft_attachment_copies_missing_or_bad_are_send_rejected() {
 
         let mut msg = message(&["bob@x.org"], vec![file("new.pdf")]);
 
-        forward(&mut msg, vec![attachment]);
+        if forwarding {
+            forward(&mut msg, vec![attachment]);
+        }
 
         let result = session(&server, 0).send(&keys, &msg).await;
         let Err(Error::SendRejected { draft_id, source }) = result else {

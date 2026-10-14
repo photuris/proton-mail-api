@@ -277,6 +277,7 @@ impl Transport {
                 },
                 true,
                 false,
+                false,
             )
             .await?;
 
@@ -358,7 +359,7 @@ impl Transport {
             .builder(Method::POST, "/auth/v4/refresh", false)
             .header("x-pm-uid", &old.uid)
             .json(&body);
-        let buffered = self.send_once(req, true).await?;
+        let buffered = self.send_once(req, true, true).await?;
 
         if matches!(buffered.status, 400 | 422) {
             return Err(Error::SessionExpired);
@@ -419,22 +420,24 @@ impl Transport {
         auto_refresh: bool,
         backoff: bool,
     ) -> Result<Buffered> {
-        self.send_fallible(|| Ok(build()), auto_refresh, backoff)
+        self.send_fallible(|| Ok(build()), auto_refresh, backoff, true)
             .await
     }
 
-    /// Like [`send`](Self::send), for a `build` that can fail. A failure
-    /// is returned before anything is sent.
+    /// Like [`send`](Self::send), for a `build` that can fail; a failure is
+    /// returned before anything is sent. With `replay` every request is sent
+    /// from a clone (see [`send_once`](Self::send_once)).
     async fn send_fallible(
         &self,
         build: impl Fn() -> Result<RequestBuilder>,
         auto_refresh: bool,
         backoff: bool,
+        replay: bool,
     ) -> Result<Buffered> {
         // Read before `build()` so the request's tokens are never older than
         // this generation.
         let generation = self.generation.load(Ordering::Acquire);
-        let first = self.send_once(build()?, backoff).await?;
+        let first = self.send_once(build()?, backoff, replay).await?;
 
         if first.status == 401 && auto_refresh && self.tokens().is_some() {
             {
@@ -447,7 +450,7 @@ impl Transport {
                 }
             }
 
-            return classify(self.send_once(build()?, backoff).await?);
+            return classify(self.send_once(build()?, backoff, replay).await?);
         }
 
         classify(first)
@@ -459,16 +462,22 @@ impl Transport {
     /// the bodies `early_error` maps become errors here so they are never
     /// retried.
     ///
-    /// Without `backoff` the request is sent as it is and never cloned, so a
-    /// body that cannot be replayed (multipart) is fine.
-    async fn send_once(&self, req: RequestBuilder, backoff: bool) -> Result<Buffered> {
+    /// With `replay` each attempt is sent from a clone of `req`, and a request
+    /// that cannot be cloned (a body that failed to build) is
+    /// `InvalidConfig`. Without it `req` is sent as it is and never cloned,
+    /// so a multipart body works; that is only for a caller without `backoff`,
+    /// because a second attempt would have no request left.
+    async fn send_once(
+        &self,
+        req: RequestBuilder,
+        backoff: bool,
+        replay: bool,
+    ) -> Result<Buffered> {
         let mut retries = 0;
         let mut req = Some(req);
 
         loop {
-            // Only a backoff retry needs a copy; without backoff this loop
-            // runs once, because every path below returns.
-            let attempt = if backoff {
+            let attempt = if replay {
                 req.as_ref().and_then(RequestBuilder::try_clone)
             } else {
                 req.take()

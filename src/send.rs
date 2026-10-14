@@ -372,7 +372,7 @@ impl Session {
             .to_owned();
 
         let attach = async {
-            let mut attachment_keys = forwarded_copy_keys(keys, &created, forwarded.len())?;
+            let mut attachment_keys = draft_attachment_keys(keys, &created, forwarded.len())?;
 
             attachment_keys.extend(
                 self.upload_all(&draft_id, &msg.attachments, &encrypted)
@@ -496,23 +496,21 @@ fn forwarded_key_packets(
         .collect()
 }
 
-/// The keys of the `expected` attachments the server copied into the draft,
-/// read from `created`, the draft response. Does nothing for `0`.
+/// The keys of every attachment the draft response `created` lists: the
+/// copies the server made of forwarded attachments, and any other it lists.
+/// A missing or null list is an empty one. `expected` is how many forwarded
+/// attachments the draft must list at least.
 ///
 /// # Errors
 ///
-/// [`Error::InvalidResponse`] when the draft lists no usable attachments
-/// list, fewer than `expected` attachments, or one without key packets;
-/// [`Error::Crypto`] when a copy's key packets open with no key.
-fn forwarded_copy_keys(
+/// [`Error::InvalidResponse`] when the list is not a list of attachments,
+/// has fewer than `expected` entries, or has one without key packets;
+/// [`Error::Crypto`] when an attachment's key packets open with no key.
+fn draft_attachment_keys(
     keys: &UnlockedKeys,
     created: &Value,
     expected: usize,
 ) -> Result<Vec<AttachmentKey>> {
-    if expected == 0 {
-        return Ok(Vec::new());
-    }
-
     let copies: Vec<DraftAttachment> = match created.pointer("/Message/Attachments") {
         None | Some(Value::Null) => Vec::new(),
         Some(list) => serde_json::from_value(list.clone()).map_err(|_| Error::InvalidResponse)?,

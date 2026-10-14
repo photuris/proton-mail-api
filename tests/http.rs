@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use proton_mail_api::error::Error;
 use proton_mail_api::http::{AuthTokens, Transport, TransportConfig};
 use proton_mail_api::types::{ApiBool, ApiErrorBody, Empty};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::json;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -829,4 +829,42 @@ async fn user_agent_default_custom_and_invalid() {
         assert!(!err.to_string().contains("bad"));
         assert!(!format!("{err:?}").contains("bad"));
     }
+}
+
+/// A body whose serialisation fails with text that must never be shown.
+struct FailedBody;
+
+impl Serialize for FailedBody {
+    fn serialize<S: Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        Err(serde::ser::Error::custom("PASSWORDMARKER"))
+    }
+}
+
+#[tokio::test]
+async fn json_body_build_error_is_static_and_redacted() {
+    let server = MockServer::start().await;
+    let t = transport(&server, 2);
+
+    t.set_tokens(Some(tokens("old")));
+
+    let got = t
+        .post_json_once::<_, serde_json::Value>("/review", &FailedBody)
+        .await;
+    let shown = format!("{got:?}");
+
+    assert!(
+        matches!(
+            &got,
+            Err(Error::InvalidConfig("request body cannot be replayed"))
+        ),
+        "got {shown}"
+    );
+    assert!(!shown.contains("PASSWORDMARKER"), "Debug leaks: {shown}");
+    assert!(
+        !got.expect_err("an error")
+            .to_string()
+            .contains("PASSWORDMARKER"),
+        "Display leaks"
+    );
+    assert!(transport_requests(&server).await.is_empty(), "nothing sent");
 }
