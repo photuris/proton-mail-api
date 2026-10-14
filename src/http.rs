@@ -1,9 +1,9 @@
 //! HTTP transport: headers, bounded 429/503 backoff, typed errors, and a
 //! single token refresh on 401.
 //!
-//! Every public call goes through [`Transport::send`], which wraps
-//! [`Transport::send_once`]. `refresh_tokens` uses `send_once` only, so the
-//! call graph has no async recursion.
+//! Every public call goes through [`Transport::send`] (or its fallible twin
+//! `send_fallible`), which wraps [`Transport::send_once`]. `refresh_tokens`
+//! uses `send_once` only, so the call graph has no async recursion.
 
 use std::fmt;
 use std::sync::RwLock;
@@ -250,6 +250,39 @@ impl Transport {
         decode(&buffered.body)
     }
 
+    /// `POST path` with the multipart form `form` makes, decoding the success
+    /// body into `T`. Never waits or repeats on 429/503, like
+    /// [`post_json_once`](Self::post_json_once); a 401 still refreshes the
+    /// tokens and repeats once.
+    ///
+    /// A multipart body cannot be cloned, so `form` is called again for the
+    /// repeat after a 401 and each attempt gets a fresh request.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Transport`] when `form` fails, before anything is sent;
+    /// otherwise any [`Error`] the response classifies to; see the module
+    /// docs.
+    pub async fn post_multipart_once<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        form: impl Fn() -> reqwest::Result<reqwest::multipart::Form>,
+    ) -> Result<T> {
+        let buffered = self
+            .send_fallible(
+                || {
+                    let form = form().map_err(Error::Transport)?;
+
+                    Ok(self.builder(Method::POST, path, true).multipart(form))
+                },
+                true,
+                false,
+            )
+            .await?;
+
+        decode(&buffered.body)
+    }
+
     /// `PUT path` with a JSON `body`, decoding the success body into `T`.
     ///
     /// # Errors
@@ -386,10 +419,22 @@ impl Transport {
         auto_refresh: bool,
         backoff: bool,
     ) -> Result<Buffered> {
+        self.send_fallible(|| Ok(build()), auto_refresh, backoff)
+            .await
+    }
+
+    /// Like [`send`](Self::send), for a `build` that can fail. A failure
+    /// is returned before anything is sent.
+    async fn send_fallible(
+        &self,
+        build: impl Fn() -> Result<RequestBuilder>,
+        auto_refresh: bool,
+        backoff: bool,
+    ) -> Result<Buffered> {
         // Read before `build()` so the request's tokens are never older than
         // this generation.
         let generation = self.generation.load(Ordering::Acquire);
-        let first = self.send_once(build(), backoff).await?;
+        let first = self.send_once(build()?, backoff).await?;
 
         if first.status == 401 && auto_refresh && self.tokens().is_some() {
             {
@@ -402,7 +447,7 @@ impl Transport {
                 }
             }
 
-            return classify(self.send_once(build(), backoff).await?);
+            return classify(self.send_once(build()?, backoff).await?);
         }
 
         classify(first)
@@ -413,13 +458,22 @@ impl Transport {
     /// [`Error::Api`] with its envelope code. Returns every other response as it came, except that
     /// the bodies `early_error` maps become errors here so they are never
     /// retried.
+    ///
+    /// Without `backoff` the request is sent as it is and never cloned, so a
+    /// body that cannot be replayed (multipart) is fine.
     async fn send_once(&self, req: RequestBuilder, backoff: bool) -> Result<Buffered> {
         let mut retries = 0;
+        let mut req = Some(req);
 
         loop {
-            let attempt = req
-                .try_clone()
-                .ok_or(Error::InvalidConfig("request body cannot be replayed"))?;
+            // Only a backoff retry needs a copy; without backoff this loop
+            // runs once, because every path below returns.
+            let attempt = if backoff {
+                req.as_ref().and_then(RequestBuilder::try_clone)
+            } else {
+                req.take()
+            }
+            .ok_or(Error::InvalidConfig("request body cannot be replayed"))?;
             let response = attempt.send().await.map_err(Error::Transport)?;
 
             let status = response.status().as_u16();

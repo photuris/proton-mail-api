@@ -135,6 +135,7 @@ fn message(to: &[&str]) -> OutgoingMessage {
         body: "Hello there,\nsecond line.\n".into(),
         body_type: BodyType::Plain,
         parent: None,
+        attachments: vec![],
     }
 }
 
@@ -525,6 +526,7 @@ async fn reply_sets_parent_id_and_action() {
         msg.parent = Some(ParentRef {
             id: "parent-1".into(),
             action,
+            forward_attachments: vec![],
         });
 
         session(&server, 0)

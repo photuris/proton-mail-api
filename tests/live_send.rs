@@ -88,6 +88,7 @@ fn message(from: &Address, to: &str, subject: String, body: &str) -> OutgoingMes
         body: body.to_string(),
         body_type: BodyType::Plain,
         parent: None,
+        attachments: vec![],
     }
 }
 

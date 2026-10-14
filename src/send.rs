@@ -4,22 +4,29 @@
 //! package with [`crate::compose`] and sends it. The draft and the send
 //! request go out through [`Transport::post_json_once`], so neither is ever
 //! repeated on a 429 or 503: a repeated send could deliver a message twice.
+//! Each attachment upload goes out once through
+//! [`Transport::post_multipart_once`], because a repeated upload would attach
+//! the file twice.
 //!
 //! [`Transport::post_json_once`]: crate::http::Transport::post_json_once
+//! [`Transport::post_multipart_once`]: crate::http::Transport::post_multipart_once
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use pgp::composed::{Deserializable, SignedPublicKey};
+use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::compose::{
-    BodyType, Package, RecipientKey, RecipientKind, build_package, encrypt_draft_body,
-    encryption_subkey,
+    AttachmentKey, BodyType, EncryptedAttachment, Package, RecipientKey, RecipientKind,
+    add_attachment_keys, attachment_session_key, build_package, encrypt_attachment,
+    encrypt_draft_body, encryption_subkey, rekey_for_sender,
 };
 use crate::error::{Error, Result};
 use crate::keys::{AddressKey, UnlockedKeys};
-use crate::messages::{MessageMetadata, Recipient};
+use crate::messages::{Attachment, MessageMetadata, Recipient};
 use crate::session::Session;
 use crate::types::{ApiBool, path_segment};
 
@@ -58,6 +65,47 @@ pub struct ParentRef {
     pub id: String,
     /// How the new message relates to it.
     pub action: ParentAction,
+    /// The parent's attachments to carry over. Used only when `action` is
+    /// [`ParentAction::Forward`]; ignored otherwise.
+    pub forward_attachments: Vec<Attachment>,
+}
+
+/// How an outgoing attachment is shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachmentDisposition {
+    /// A regular attachment.
+    Attachment,
+    /// An inline part the body refers to as `cid:<content_id>`.
+    Inline {
+        /// The content id, without angle brackets.
+        content_id: String,
+    },
+}
+
+/// A file to attach to an outgoing message.
+#[derive(Clone)]
+pub struct OutgoingAttachment {
+    /// File name.
+    pub filename: String,
+    /// MIME type, such as `image/png`.
+    pub mime_type: String,
+    /// The file bytes.
+    pub data: Vec<u8>,
+    /// Regular or inline.
+    pub disposition: AttachmentDisposition,
+}
+
+impl fmt::Debug for OutgoingAttachment {
+    /// Prints the name, MIME type and disposition; the data prints as its
+    /// length.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OutgoingAttachment")
+            .field("filename", &self.filename)
+            .field("mime_type", &self.mime_type)
+            .field("disposition", &self.disposition)
+            .field("data", &format_args!("<{} bytes>", self.data.len()))
+            .finish()
+    }
 }
 
 /// A message to send.
@@ -79,11 +127,13 @@ pub struct OutgoingMessage {
     pub body_type: BodyType,
     /// The message this one replies to or forwards.
     pub parent: Option<ParentRef>,
+    /// Files to attach, uploaded in this order.
+    pub attachments: Vec<OutgoingAttachment>,
 }
 
 impl fmt::Debug for OutgoingMessage {
     /// Prints the addresses, body type and parent; the subject and the body
-    /// print as `"<redacted>"`.
+    /// print as `"<redacted>"` and the attachments as a count.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OutgoingMessage")
             .field("from", &self.from)
@@ -94,6 +144,10 @@ impl fmt::Debug for OutgoingMessage {
             .field("body", &"<redacted>")
             .field("body_type", &self.body_type)
             .field("parent", &self.parent)
+            .field(
+                "attachments",
+                &format_args!("<{} items>", self.attachments.len()),
+            )
             .finish()
     }
 }
@@ -122,7 +176,9 @@ struct DraftRequest<'a> {
     #[serde(rename = "Message")]
     message: DraftMessage<'a>,
     #[serde(rename = "AttachmentKeyPackets")]
-    attachment_key_packets: [String; 0],
+    /// `[]` unless this forwards attachments, then an object by parent
+    /// attachment id.
+    attachment_key_packets: Value,
     #[serde(rename = "ParentID", skip_serializing_if = "Option::is_none")]
     parent_id: Option<&'a str>,
     #[serde(rename = "Action", skip_serializing_if = "Option::is_none")]
@@ -159,11 +215,29 @@ struct SendRequest<'a> {
     packages: &'a [Package],
 }
 
-/// Reply to the draft request.
+/// An attachment the draft response lists: a copy of a forwarded one.
 #[derive(Deserialize)]
-struct DraftReply {
-    #[serde(rename = "Message")]
-    message: MessageMetadata,
+struct DraftAttachment {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "KeyPackets", default)]
+    key_packets: Option<String>,
+    #[serde(rename = "Signature", default)]
+    signature: Option<String>,
+}
+
+/// Reply to the attachment upload request.
+#[derive(Deserialize)]
+struct UploadReply {
+    #[serde(rename = "Attachment")]
+    attachment: UploadedAttachment,
+}
+
+/// The uploaded attachment as the server reports it.
+#[derive(Deserialize)]
+struct UploadedAttachment {
+    #[serde(rename = "ID")]
+    id: String,
 }
 
 /// Reply to the send request.
@@ -210,19 +284,30 @@ impl Session {
     /// Sends `msg` and returns the server's metadata of the sent message.
     ///
     /// Looks up every recipient (to, cc and bcc, each distinct address once),
-    /// creates the draft, then sends it in one package. Nothing is created
-    /// before the lookups have all succeeded. The draft and the send request
-    /// are never repeated.
+    /// encrypts the attachments, creates the draft, uploads the attachments
+    /// one by one, then sends the draft in one package. Nothing is created
+    /// before the lookups and the attachment crypto have all succeeded. The
+    /// draft, each upload and the send request are never repeated, except
+    /// for one repeat after a token refresh on 401.
+    ///
+    /// For a forward, `forward_attachments` of the parent are re-keyed to the
+    /// sender and copied by the server into the draft.
     ///
     /// # Errors
     ///
     /// - [`Error::NoRecipients`], [`Error::UnknownSender`] and any lookup
     ///   error, before anything is created.
+    /// - [`Error::Crypto`] when an attachment cannot be encrypted or a
+    ///   forwarded attachment's key cannot be recovered, before anything is
+    ///   created.
     /// - The draft request's own error, as it is, when the draft could not be
     ///   created. If its response was lost a draft may still exist; its id is
     ///   unknown.
-    /// - [`Error::SendRejected`] when the server refused the send before
-    ///   processing it: the message was not sent and the draft is kept.
+    /// - [`Error::SendRejected`] when the message was not sent and the draft
+    ///   is kept: the server refused the send before processing it, or an
+    ///   attachment step after the draft failed (an upload, reading the
+    ///   draft's attachments, or attachment crypto). The draft may hold some
+    ///   of the attachments.
     /// - [`Error::SendOutcomeUnknown`] when the send request got no readable
     ///   answer, a 5xx or an undecodable body: the message may be sent or may
     ///   still be sent, so the caller must not send it again.
@@ -249,7 +334,13 @@ impl Session {
         }
 
         let body = encrypt_draft_body(sender, &msg.body)?;
-        let package = build_package(sender, &msg.body, msg.body_type, &recipient_keys)?;
+        let mut package = build_package(sender, &msg.body, msg.body_type, &recipient_keys)?;
+        let encrypted = msg
+            .attachments
+            .iter()
+            .map(|a| encrypt_attachment(sender, &a.filename, &a.data))
+            .collect::<Result<Vec<_>>>()?;
+        let forwarded = forwarded_key_packets(keys, sender, msg)?;
 
         let draft = DraftRequest {
             message: DraftMessage {
@@ -263,15 +354,38 @@ impl Session {
                 address_id: &sender.address_id,
                 unread: ApiBool(false),
             },
-            attachment_key_packets: [],
+            attachment_key_packets: if forwarded.is_empty() {
+                json!([])
+            } else {
+                json!(forwarded)
+            },
             parent_id: msg.parent.as_ref().map(|p| p.id.as_str()),
             action: msg.parent.as_ref().map(|p| p.action.wire()),
         };
-        let created: DraftReply = self
+        let created: Value = self
             .transport()
             .post_json_once("/mail/v4/messages", &draft)
             .await?;
-        let draft_id = created.message.id;
+        let draft_id = created["Message"]["ID"]
+            .as_str()
+            .ok_or(Error::InvalidResponse)?
+            .to_owned();
+
+        let attach = async {
+            let mut attachment_keys = forwarded_copy_keys(keys, &created, forwarded.len())?;
+
+            attachment_keys.extend(
+                self.upload_all(&draft_id, &msg.attachments, &encrypted)
+                    .await?,
+            );
+
+            add_attachment_keys(&mut package, &recipient_keys, &attachment_keys)
+        };
+
+        attach.await.map_err(|source| Error::SendRejected {
+            draft_id: draft_id.clone(),
+            source: Box::new(source),
+        })?;
 
         let sent: SentReply = self
             .transport()
@@ -297,6 +411,132 @@ impl Session {
 
         Ok(sent.sent)
     }
+
+    /// Uploads `attachments` to the draft `draft_id`, in order, each once,
+    /// and returns their keys. `encrypted` holds the matching crypto of each.
+    async fn upload_all(
+        &self,
+        draft_id: &str,
+        attachments: &[OutgoingAttachment],
+        encrypted: &[EncryptedAttachment],
+    ) -> Result<Vec<AttachmentKey>> {
+        let mut keys = Vec::with_capacity(attachments.len());
+
+        for (attachment, crypto) in attachments.iter().zip(encrypted) {
+            let reply: UploadReply = self
+                .transport()
+                .post_multipart_once("/mail/v4/attachments", || {
+                    upload_form(draft_id, attachment, crypto)
+                })
+                .await?;
+
+            keys.push(AttachmentKey {
+                id: reply.attachment.id,
+                session_key: crypto.session_key.clone(),
+                signed: true,
+            });
+        }
+
+        Ok(keys)
+    }
+}
+
+/// The multipart form of one attachment upload.
+fn upload_form(
+    draft_id: &str,
+    attachment: &OutgoingAttachment,
+    crypto: &EncryptedAttachment,
+) -> reqwest::Result<Form> {
+    let (disposition, content_id) = match &attachment.disposition {
+        AttachmentDisposition::Attachment => ("attachment", ""),
+        AttachmentDisposition::Inline { content_id } => ("inline", content_id.as_str()),
+    };
+
+    Ok(Form::new()
+        .text("MessageID", draft_id.to_owned())
+        .text("Filename", attachment.filename.clone())
+        .text("MIMEType", attachment.mime_type.clone())
+        .text("Disposition", disposition)
+        .text("ContentID", content_id.to_owned())
+        .part("KeyPackets", blob(&crypto.key_packets)?)
+        .part("DataPacket", blob(&crypto.data_packet)?)
+        .part("Signature", blob(&crypto.signature)?))
+}
+
+/// A file part named `blob` with the generic binary content type.
+fn blob(bytes: &[u8]) -> reqwest::Result<Part> {
+    Part::bytes(bytes.to_vec())
+        .file_name("blob")
+        .mime_str("application/octet-stream")
+}
+
+/// For a forward, the key packet of each forwarded attachment re-encrypted to
+/// the sender, by the parent attachment's id; empty for any other message.
+fn forwarded_key_packets(
+    keys: &UnlockedKeys,
+    sender: &AddressKey,
+    msg: &OutgoingMessage,
+) -> Result<BTreeMap<String, String>> {
+    let Some(parent) = msg
+        .parent
+        .as_ref()
+        .filter(|p| p.action == ParentAction::Forward)
+    else {
+        return Ok(BTreeMap::new());
+    };
+
+    parent
+        .forward_attachments
+        .iter()
+        .map(|a| {
+            let session_key = attachment_session_key(keys, &a.key_packets)?;
+
+            Ok((a.id.clone(), rekey_for_sender(sender, &session_key)?))
+        })
+        .collect()
+}
+
+/// The keys of the `expected` attachments the server copied into the draft,
+/// read from `created`, the draft response. Does nothing for `0`.
+///
+/// # Errors
+///
+/// [`Error::InvalidResponse`] when the draft lists no usable attachments
+/// list, fewer than `expected` attachments, or one without key packets;
+/// [`Error::Crypto`] when a copy's key packets open with no key.
+fn forwarded_copy_keys(
+    keys: &UnlockedKeys,
+    created: &Value,
+    expected: usize,
+) -> Result<Vec<AttachmentKey>> {
+    if expected == 0 {
+        return Ok(Vec::new());
+    }
+
+    let copies: Vec<DraftAttachment> = match created.pointer("/Message/Attachments") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(list) => serde_json::from_value(list.clone()).map_err(|_| Error::InvalidResponse)?,
+    };
+
+    if copies.len() < expected {
+        return Err(Error::InvalidResponse);
+    }
+
+    copies
+        .into_iter()
+        .map(|copy| {
+            let key_packets = copy
+                .key_packets
+                .filter(|k| !k.is_empty())
+                .ok_or(Error::InvalidResponse)?;
+
+            Ok(AttachmentKey {
+                id: copy.id,
+                session_key: attachment_session_key(keys, &key_packets)?,
+                signed: copy.signature.is_some_and(|s| !s.is_empty()),
+            })
+        })
+        .collect()
 }
 
 /// The first key that is not obsolete, parses and has a usable encryption
