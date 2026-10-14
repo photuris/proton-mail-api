@@ -78,6 +78,15 @@ pub enum Error {
     /// The client was configured with an unusable value.
     #[error("invalid client configuration: {0}")]
     InvalidConfig(&'static str),
+    /// A message to send has no recipient.
+    #[error("message has no recipients")]
+    NoRecipients,
+    /// The sending address has no unlocked key in the given keys.
+    #[error("sender address has no unlocked key")]
+    UnknownSender,
+    /// A Proton recipient has no key that can encrypt.
+    #[error("recipient has no usable encryption key")]
+    RecipientKeyUnusable,
 }
 
 /// Result alias used across the crate.
@@ -133,6 +142,9 @@ impl fmt::Debug for Error {
             Self::NoUsableKey => f.write_str("NoUsableKey"),
             Self::ActionFailed { ids } => f.debug_struct("ActionFailed").field("ids", ids).finish(),
             Self::InvalidConfig(s) => f.debug_tuple("InvalidConfig").field(s).finish(),
+            Self::NoRecipients => f.write_str("NoRecipients"),
+            Self::UnknownSender => f.write_str("UnknownSender"),
+            Self::RecipientKeyUnusable => f.write_str("RecipientKeyUnusable"),
         }
     }
 }

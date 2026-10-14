@@ -72,12 +72,14 @@
 //! ```
 
 pub mod actions;
+pub mod compose;
 pub mod error;
 pub mod events;
 pub mod http;
 pub mod keys;
 pub mod labels;
 pub mod messages;
+pub mod send;
 pub mod session;
 pub mod srp;
 pub mod types;
