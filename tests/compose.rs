@@ -21,7 +21,7 @@ use pgp::types::{
 };
 use proton_mail_api::compose::{
     BodyType, Package, RecipientKey, RecipientKind, build_package, encrypt_draft_body,
-    encryption_subkey,
+    encryption_subkey, encryption_subkey_at,
 };
 use proton_mail_api::error::Error;
 use proton_mail_api::keys::AddressKey;
@@ -420,14 +420,19 @@ fn rsa_recipient_decrypts() {
     );
 }
 
-/// Key flags allowing encryption.
-fn encrypt_flags() -> KeyFlags {
+/// Key flags allowing the given kinds of encryption.
+fn flags_with(comms: bool, storage: bool) -> KeyFlags {
     let mut flags = KeyFlags::default();
 
-    flags.set_encrypt_comms(true);
-    flags.set_encrypt_storage(true);
+    flags.set_encrypt_comms(comms);
+    flags.set_encrypt_storage(storage);
 
     flags
+}
+
+/// Key flags allowing both kinds of encryption.
+fn encrypt_flags() -> KeyFlags {
+    flags_with(true, true)
 }
 
 /// A signature of type `typ` by `signer`'s primary key over `sub`, created at
@@ -503,8 +508,9 @@ fn resigned(sub: &SignedPublicSubKey, signatures: Vec<Signature>) -> SignedPubli
     SignedPublicSubKey::new(sub.key.clone(), signatures)
 }
 
-fn chosen(public: &SignedPublicKey) -> Option<Fingerprint> {
-    encryption_subkey(public).map(|s| s.fingerprint())
+/// Fingerprint of the subkey selected for `public` at `now`.
+fn chosen(public: &SignedPublicKey, now: Timestamp) -> Option<Fingerprint> {
+    encryption_subkey_at(public, now).map(|s| s.fingerprint())
 }
 
 #[test]
@@ -574,22 +580,94 @@ fn newest_valid_subkey_is_chosen() {
         .expect("primary revocation signs"),
     );
 
+    // Two valid subkeys created in the same second: the first wins.
+    let tie_time = ago(3600);
+    let tie = generate(
+        KeyVersion::V4,
+        KeyType::Ed25519Legacy,
+        vec![ecdh(tie_time), ecdh(tie_time)],
+    )
+    .to_public_key();
+    let tie_first_fp = tie.public_subkeys[0].fingerprint();
+
+    // A newer signing-only Ed25519 subkey whose binding, valid and signed by
+    // the primary, claims encryption: only its algorithm rules it out.
+    let odd = generate(
+        KeyVersion::V4,
+        KeyType::Ed25519Legacy,
+        vec![
+            ecdh(ago(7200)),
+            subkey(
+                KeyVersion::V4,
+                KeyType::Ed25519Legacy,
+                EncryptionCaps::None,
+                true,
+                ago(3600),
+            ),
+        ],
+    );
+    let mut cannot_encrypt = odd.to_public_key();
+    let odd_sub = cannot_encrypt.public_subkeys[1].clone();
+    let odd_older_fp = cannot_encrypt.public_subkeys[0].fingerprint();
+
+    cannot_encrypt.public_subkeys[1] = resigned(&odd_sub, vec![binding(&odd, None, now, &odd_sub)]);
+
+    // A binding of the newer subkey with the given flags, no expiry.
+    let flagged = |comms, storage| {
+        with_newer(resigned(
+            &newer,
+            vec![sign_subkey(
+                &secret,
+                SignatureType::SubkeyBinding,
+                flags_with(comms, storage),
+                None,
+                now,
+                &newer,
+            )],
+        ))
+    };
+
+    // A binding of the newer subkey that expires `lifetime` seconds after
+    // the subkey was created.
+    let expiring = |lifetime| {
+        with_newer(resigned(
+            &newer,
+            vec![binding(&secret, Some(lifetime), now, &newer)],
+        ))
+    };
+    let expiry = newer.key.created_at().as_secs() + 100;
+    let at = |secs| Timestamp::from_secs(secs);
+
     let cases = [
-        ("newer valid", public.clone(), Some(newer_fp.clone())),
+        ("newer valid", public.clone(), now, Some(newer_fp.clone())),
         (
             "newer binding with zero expiry",
-            with_newer(resigned(
-                &newer,
-                vec![binding(&secret, Some(0), now, &newer)],
-            )),
+            expiring(0),
+            now,
             Some(newer_fp.clone()),
         ),
         (
             "newer binding expired",
-            with_newer(resigned(
-                &newer,
-                vec![binding(&secret, Some(1), now, &newer)],
-            )),
+            expiring(1),
+            now,
+            Some(older_fp.clone()),
+        ),
+        (
+            "finite expiry whose sum exceeds u32::MAX",
+            expiring(u32::MAX),
+            now,
+            Some(newer_fp.clone()),
+        ),
+        (
+            "one second before the expiry",
+            expiring(100),
+            at(expiry - 1),
+            Some(newer_fp.clone()),
+        ),
+        (
+            "exactly at the expiry",
+            expiring(100),
+            at(expiry),
             Some(older_fp.clone()),
         ),
         (
@@ -600,11 +678,13 @@ fn newest_valid_subkey_is_chosen() {
                 Timestamp::from_secs(now.as_secs() + 10),
                 &newer,
             )])),
+            now,
             Some(older_fp.clone()),
         ),
         (
             "newer revoked",
             with_newer(plus(vec![revocation(&secret, &newer)])),
+            now,
             Some(older_fp.clone()),
         ),
         (
@@ -613,12 +693,44 @@ fn newest_valid_subkey_is_chosen() {
                 &newer,
                 vec![binding(&stranger, None, now, &newer)],
             )),
+            now,
             Some(older_fp.clone()),
         ),
         (
             "newer RSA binding allows only signing",
             rsa_signing,
+            now,
             Some(rsa_older_fp),
+        ),
+        (
+            "newer binding allows only communications encryption",
+            flagged(true, false),
+            now,
+            Some(newer_fp.clone()),
+        ),
+        (
+            "newer binding allows only storage encryption",
+            flagged(false, true),
+            now,
+            Some(newer_fp.clone()),
+        ),
+        (
+            "newer binding allows no encryption",
+            flagged(false, false),
+            now,
+            Some(older_fp.clone()),
+        ),
+        (
+            "newer algorithm cannot encrypt",
+            cannot_encrypt,
+            now,
+            Some(odd_older_fp),
+        ),
+        (
+            "equal creation times keep the first",
+            tie,
+            now,
+            Some(tie_first_fp),
         ),
         (
             "older expired and newer revoked",
@@ -629,14 +741,21 @@ fn newest_valid_subkey_is_chosen() {
                 )),
                 plus(vec![revocation(&secret, &newer)]),
             ),
+            now,
             None,
         ),
-        ("primary revoked", primary_revoked, None),
+        ("primary revoked", primary_revoked, now, None),
     ];
 
-    for (name, key, expected) in cases {
-        assert!(chosen(&key) == expected, "{name}: wrong subkey chosen");
+    for (name, key, at, expected) in cases {
+        assert!(chosen(&key, at) == expected, "{name}: wrong subkey chosen");
     }
+
+    assert!(
+        encryption_subkey(&expiring(1)).map(|s| s.fingerprint()) == Some(older_fp)
+            && encryption_subkey(&public).map(|s| s.fingerprint()) == Some(newer_fp),
+        "encryption_subkey judges expiry at the current time"
+    );
 
     // The package encrypts to the newer subkey: a key holding only the older
     // subkey's secret cannot open it.

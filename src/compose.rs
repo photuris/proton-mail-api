@@ -156,15 +156,25 @@ impl fmt::Debug for Package {
 /// it is not revoked, its bindings verify against the primary key, its newest
 /// binding allows encryption and has not expired, and its algorithm can
 /// encrypt. The candidate created last wins, the first on a tie. The primary
-/// key itself is never chosen.
+/// key itself is never chosen. Expiry is judged at the current time; see
+/// [`encryption_subkey_at`].
 pub fn encryption_subkey(public: &SignedPublicKey) -> Option<&SignedPublicSubKey> {
+    encryption_subkey_at(public, Timestamp::now())
+}
+
+/// [`encryption_subkey`] with expiry judged at `now`: a subkey whose binding
+/// expires exactly at `now` is already expired.
+pub fn encryption_subkey_at(
+    public: &SignedPublicKey,
+    now: Timestamp,
+) -> Option<&SignedPublicSubKey> {
     if public.primary_key.version() != KeyVersion::V4
         || !public.details.revocation_signatures.is_empty()
     {
         return None;
     }
 
-    let now = u64::from(Timestamp::now().as_secs());
+    let now = u64::from(now.as_secs());
     let mut best: Option<&SignedPublicSubKey> = None;
 
     for sub in &public.public_subkeys {
@@ -178,7 +188,7 @@ pub fn encryption_subkey(public: &SignedPublicKey) -> Option<&SignedPublicSubKey
     best
 }
 
-/// Whether `sub` is a candidate of [`encryption_subkey`] at `now` (seconds
+/// Whether `sub` is a candidate of [`encryption_subkey_at`] at `now` (seconds
 /// since the epoch).
 fn usable_subkey(sub: &SignedPublicSubKey, primary: &PublicKey, now: u64) -> bool {
     if sub
