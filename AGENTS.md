@@ -33,6 +33,8 @@ Read `README.md` first. This file holds what the code does not say.
 - `src/messages.rs`: list, fetch, decrypt bodies (incl. PGP/MIME) and
   attachments.
 - `src/actions.rs`: mark read/unread, add/remove label, move.
+- `src/compose.rs`: draft body and send package crypto.
+- `src/send.rs`: recipient key lookup and the send flow.
 - `tests/support/scrub.rs`: default-deny JSON scrubber for captured
   responses; shared by `tests/scrub.rs` and `tests/capture.rs`.
 
@@ -48,8 +50,10 @@ Read `README.md` first. This file holds what the code does not say.
   Its variables: `PROTON_LIVE_TEST`, `PROTON_USERNAME`, `PROTON_PASSWORD`,
   `PROTON_MAILBOX_PASSWORD` (optional), `PROTON_TOTP` (optional),
   `PROTON_APP_VERSION`, `PROTON_USER_AGENT` (optional; overrides the default
-  User-Agent), `PROTON_CAPTURE` (`1` runs `tests/capture.rs`, the read-only
-  fixture capture).
+  User-Agent), `PROTON_LIVE_SEND` (`1` runs `tests/live_send.rs`, which sends
+  real mail), `PROTON_LIVE_SEND_EXTERNAL` (optional address outside Proton for
+  a second message), `PROTON_CAPTURE` (`1` runs `tests/capture.rs`, the
+  read-only fixture capture).
 - Shape tests (`tests/captured.rs`) load `tests/fixtures/live/`: scrubbed
   captures from a real account, made with `tests/capture.rs` and reviewed by a
   person before commit. Re-capture when Proton changes a shape. Tests that

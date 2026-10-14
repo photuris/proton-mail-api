@@ -14,8 +14,8 @@ notice. Bridge is the only route Proton supports.
 - Read: labels, message list, fetch and decrypt body and attachments,
   change-events feed
 - Triage: mark read/unread, move, label
-- Send: plaintext to external recipients, PGP to Proton recipients (run 2;
-  not in this release)
+- Send: plain or HTML body; Proton recipients get the message encrypted,
+  others in the clear; reply and forward; no attachments yet
 
 Out of scope for now: calendar, SimpleLogin aliases, contacts beyond lookup
 of recipient public keys.
@@ -45,6 +45,38 @@ PROTON_LIVE_TEST=1 PROTON_USERNAME=... PROTON_PASSWORD=... \
 The live test flips and restores the read state of the newest Inbox message,
 and moves it to Archive and back. Restoring is best effort; a failed restore
 is reported by name.
+
+## Live send test
+
+`tests/live_send.rs` sends real mail: one message to the account itself, which
+it then finds in the Inbox and decrypts, and optionally one to an address
+outside Proton. Both stay in place; the test deletes nothing. It does nothing
+unless `PROTON_LIVE_SEND=1`; CI never sets it. It uses the same variables as
+the live test, plus `PROTON_LIVE_SEND_EXTERNAL`, an optional address outside
+Proton that receives the second message. Its success is the only check; read
+the message yourself.
+
+```sh
+PROTON_LIVE_SEND=1 PROTON_USERNAME=... PROTON_PASSWORD='...' \
+  PROTON_APP_VERSION=... cargo test --test live_send -- --nocapture
+```
+
+## Sending
+
+`Session::send` looks up every recipient's keys before it creates the draft, so
+a lookup failure sends nothing and leaves no draft. The draft and send requests
+are never repeated automatically, with one exception: a 401 is refused before
+processing, so a token refresh repeats the request once.
+
+- `SendRejected` means Proton refused the send before processing it. The
+  message was not sent and the draft is kept.
+- `SendOutcomeUnknown` means the message may have been sent or may still be
+  sent. Never send it again. Once delivery is done, the draft's `SENT` flag
+  confirms it; its absence proves nothing.
+
+Limits: a Proton recipient needs a v4 key with a valid encryption subkey (v6
+keys and primary-key-only keys are refused), and the sending address needs the
+same.
 
 ## Capturing fixtures
 
