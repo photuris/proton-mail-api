@@ -8,9 +8,11 @@
 //! Proton). Failure messages name the step and the crate's error text; they
 //! never carry message content, tokens, passwords or key text.
 //!
-//! This test sends real mail: one message to the account itself and, when
-//! `PROTON_LIVE_SEND_EXTERNAL` is set, one to that address. Both stay in
-//! place; the test deletes nothing.
+//! This test sends real mail: one message to the account itself with a text
+//! attachment and an inline image, a forward of that message to the account
+//! itself (carrying the received attachments) and, when
+//! `PROTON_LIVE_SEND_EXTERNAL` is set, one plain message with the text
+//! attachment to that address. All stay in place; the test deletes nothing.
 
 use std::env;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -19,8 +21,10 @@ use proton_mail_api::compose::BodyType;
 use proton_mail_api::error::Result as ApiResult;
 use proton_mail_api::keys::{Address, UnlockedKeys};
 use proton_mail_api::labels::system;
-use proton_mail_api::messages::{MessageQuery, Recipient};
-use proton_mail_api::send::OutgoingMessage;
+use proton_mail_api::messages::{Message, MessageQuery, Recipient};
+use proton_mail_api::send::{
+    AttachmentDisposition, OutgoingAttachment, OutgoingMessage, ParentAction, ParentRef,
+};
 use proton_mail_api::session::{Client, Session};
 
 type Outcome = Result<(), String>;
@@ -31,6 +35,15 @@ const INBOX_POLL_WAIT: Duration = Duration::from_secs(3);
 
 /// `Status` of an enabled address.
 const ADDRESS_ENABLED: i64 = 1;
+
+/// A valid 1x1 PNG, used as the inline image.
+const PNG: [u8; 70] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xfc, 0xcf, 0xc0, 0x50,
+    0x0f, 0x00, 0x04, 0x85, 0x01, 0x80, 0x84, 0xa9, 0x8c, 0x21, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
 
 /// A variable that is set and not empty.
 fn var(name: &str) -> Option<String> {
@@ -92,11 +105,34 @@ fn message(from: &Address, to: &str, subject: String, body: &str) -> OutgoingMes
     }
 }
 
+/// The regular attachment: a text file that depends on `secs`.
+fn text_attachment(secs: u64) -> OutgoingAttachment {
+    OutgoingAttachment {
+        filename: "live-send-check.txt".to_string(),
+        mime_type: "text/plain".to_string(),
+        data: format!("attachment check {secs}").into_bytes(),
+        disposition: AttachmentDisposition::Attachment,
+    }
+}
+
+/// The inline attachment: the 1x1 PNG, referred to by the HTML body.
+fn inline_attachment() -> OutgoingAttachment {
+    OutgoingAttachment {
+        filename: "live-inline.png".to_string(),
+        mime_type: "image/png".to_string(),
+        data: PNG.to_vec(),
+        disposition: AttachmentDisposition::Inline {
+            content_id: "live-inline@proton-mail-api".to_string(),
+        },
+    }
+}
+
 /// Asks the Inbox until a message with `subject` shows up and returns its id.
-/// A miss records nothing; an API error is recorded and ends the poll.
+/// A miss records `missing`; an API error is recorded and ends the poll.
 async fn poll_inbox(
     session: &Session,
     subject: &str,
+    missing: &str,
     results: &mut Vec<Outcome>,
 ) -> Option<String> {
     let query = MessageQuery {
@@ -112,8 +148,125 @@ async fn poll_inbox(
             tokio::time::sleep(INBOX_POLL_WAIT).await;
         }
     }
-    results.push(Err("sent message did not arrive in Inbox".to_string()));
+    results.push(Err(missing.to_string()));
     None
+}
+
+/// Checks that `received` carries the `sent` attachments: each is found by
+/// name and downloads to the sent bytes; an inline one keeps its content id.
+async fn check_attachments(
+    session: &Session,
+    keys: &UnlockedKeys,
+    received: &Message,
+    sent: &[OutgoingAttachment],
+    results: &mut Vec<Outcome>,
+) {
+    expect(
+        results,
+        received.attachments.len() == sent.len(),
+        "received attachment missing",
+    );
+
+    for want in sent {
+        let Some(att) = received
+            .attachments
+            .iter()
+            .find(|a| a.name == want.filename)
+        else {
+            results.push(Err("received attachment missing".to_string()));
+            continue;
+        };
+
+        let mut failure = "received attachment does not match";
+        if let AttachmentDisposition::Inline { content_id } = &want.disposition {
+            expect(
+                results,
+                att.disposition.eq_ignore_ascii_case("inline")
+                    && att.content_id().as_deref() == Some(content_id.as_str()),
+                "inline attachment lost its content id",
+            );
+            failure = "received inline attachment does not match";
+        }
+
+        if let Some(data) = take(
+            results,
+            "download attachment",
+            session.attachment(att, keys).await,
+        ) {
+            expect(results, data == want.data, failure);
+        }
+    }
+}
+
+/// Forwards `received` to the account itself with its attachments, waits for
+/// the forward in the Inbox and checks that the `sent` attachments came along.
+async fn forward_to_self(
+    session: &Session,
+    keys: &UnlockedKeys,
+    from: &Address,
+    marker: &str,
+    received: &Message,
+    sent: &[OutgoingAttachment],
+    results: &mut Vec<Outcome>,
+) {
+    let subject = format!("{marker} forward");
+    let forward = OutgoingMessage {
+        parent: Some(ParentRef {
+            id: received.meta.id.clone(),
+            action: ParentAction::Forward,
+            forward_attachments: received.attachments.clone(),
+        }),
+        ..message(from, &from.email, subject.clone(), "forward check")
+    };
+
+    if take(
+        results,
+        "forward to self",
+        session.send(keys, &forward).await,
+    )
+    .is_none()
+    {
+        return;
+    }
+
+    let Some(id) = poll_inbox(
+        session,
+        &subject,
+        "forwarded message did not arrive in Inbox",
+        results,
+    )
+    .await
+    else {
+        return;
+    };
+    let Some(forwarded) = take(
+        results,
+        "fetch forwarded message",
+        session.message(&id).await,
+    ) else {
+        return;
+    };
+
+    let mut matches = forwarded.attachments.len() == sent.len();
+    for want in sent {
+        let Some(att) = forwarded
+            .attachments
+            .iter()
+            .find(|a| a.name == want.filename)
+        else {
+            matches = false;
+            continue;
+        };
+        let Some(data) = take(
+            results,
+            "download attachment",
+            session.attachment(att, keys).await,
+        ) else {
+            continue;
+        };
+        matches &= data == want.data;
+    }
+    expect(results, matches, "forwarded attachment does not match");
 }
 
 /// Everything after login. Steps that need an earlier result are skipped
@@ -144,29 +297,60 @@ async fn send_steps(
         .map_or(0, |d| d.as_secs());
     let marker = format!("proton-mail-api live send {secs}");
     let body = format!("live send check {secs}");
+    let html = format!("<p>{body}</p><img src=\"cid:live-inline@proton-mail-api\">");
+    let attachments = vec![text_attachment(secs), inline_attachment()];
 
-    let to_self = message(from, &from.email, marker.clone(), &body);
+    let to_self = OutgoingMessage {
+        body_type: BodyType::Html,
+        attachments: attachments.clone(),
+        ..message(from, &from.email, marker.clone(), &html)
+    };
     let sent = take(results, "send to self", session.send(&keys, &to_self).await);
 
     if sent.is_some()
-        && let Some(id) = poll_inbox(session, &marker, results).await
+        && let Some(id) = poll_inbox(
+            session,
+            &marker,
+            "sent message did not arrive in Inbox",
+            results,
+        )
+        .await
         && let Some(received) = take(results, "fetch sent message", session.message(&id).await)
-        && let Some(decrypted) = take(
+    {
+        if let Some(decrypted) = take(
             results,
             "decrypt sent message",
             received.decrypt_body(&keys),
-        )
-    {
-        let text = decrypted.text_and_html().0;
-        expect(
+        ) {
+            expect(
+                results,
+                decrypted
+                    .text_and_html()
+                    .1
+                    .as_deref()
+                    .is_some_and(|html| html.contains(&body)),
+                "received body does not match",
+            );
+        }
+
+        check_attachments(session, &keys, &received, &attachments, results).await;
+        forward_to_self(
+            session,
+            &keys,
+            from,
+            &marker,
+            &received,
+            &attachments,
             results,
-            text.as_deref().map(str::trim) == Some(body.as_str()),
-            "received body does not match",
-        );
+        )
+        .await;
     }
 
     if let Some(address) = external {
-        let outgoing = message(from, address, format!("{marker} external"), &body);
+        let outgoing = OutgoingMessage {
+            attachments: vec![text_attachment(secs)],
+            ..message(from, address, format!("{marker} external"), &body)
+        };
         take(
             results,
             "send to external",

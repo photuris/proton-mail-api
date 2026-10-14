@@ -15,7 +15,8 @@ notice. Bridge is the only route Proton supports.
   change-events feed
 - Triage: mark read/unread, move, label
 - Send: plain or HTML body; Proton recipients get the message encrypted,
-  others in the clear; reply and forward; no attachments yet
+  others in the clear; reply and forward; attachments, regular and inline;
+  a forward carries the original's attachments
 
 Out of scope for now: calendar, SimpleLogin aliases, contacts beyond lookup
 of recipient public keys.
@@ -48,9 +49,12 @@ is reported by name.
 
 ## Live send test
 
-`tests/live_send.rs` sends real mail: one message to the account itself, which
-it then finds in the Inbox and decrypts, and optionally one to an address
-outside Proton. Both stay in place; the test deletes nothing. It does nothing
+`tests/live_send.rs` sends real mail: one message to the account itself with
+a text attachment and an inline image, which it then finds in the Inbox,
+decrypts and downloads the attachments of; a forward of that message to the
+account itself, which it checks for the same attachments; and optionally one
+plain message with the text attachment to an address outside Proton. All stay
+in place; the test deletes nothing. It does nothing
 unless `PROTON_LIVE_SEND=1`; CI never sets it. It uses the same variables as
 the live test, plus `PROTON_LIVE_SEND_EXTERNAL`, an optional address outside
 Proton that receives the second message. Its success is the only check; read
@@ -67,6 +71,14 @@ PROTON_LIVE_SEND=1 PROTON_USERNAME=... PROTON_PASSWORD='...' \
 a lookup failure sends nothing and leaves no draft. The draft and send requests
 are never repeated automatically, with one exception: a 401 is refused before
 processing, so a token refresh repeats the request once.
+
+Attachments are uploaded after the draft is created. An upload is never
+repeated, because a repeat would attach the file twice; the one exception is
+a 401, which is refused before processing, so a token refresh repeats it
+once. A failed upload, or a failure reading the draft's forwarded
+attachments, is `SendRejected` with the draft id: the message was not sent,
+and the draft is kept and may hold some of the attachments. A lost upload
+response is also `SendRejected`, because the final send was never made.
 
 - `SendRejected` means Proton refused the send before processing it. The
   message was not sent and the draft is kept.
