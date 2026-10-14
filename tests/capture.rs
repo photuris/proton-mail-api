@@ -243,15 +243,17 @@ async fn capture_live_fixtures() {
         return;
     }
 
-    let username = required("PROTON_USERNAME");
-    let password = required("PROTON_PASSWORD");
-    let app_version = required("PROTON_APP_VERSION");
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let tmp = fixtures.join("live.tmp");
 
+    // Before the required variables, so a missing one leaves no stale stage.
     if tmp.exists() {
         fs::remove_dir_all(&tmp).unwrap_or_else(|e| panic!("clearing live.tmp: {e}"));
     }
+
+    let username = required("PROTON_USERNAME");
+    let password = required("PROTON_PASSWORD");
+    let app_version = required("PROTON_APP_VERSION");
 
     fs::create_dir_all(&tmp).unwrap_or_else(|e| panic!("creating live.tmp: {e}"));
 
