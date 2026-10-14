@@ -65,6 +65,9 @@ const LABEL_ID_KEYS: [&str; 3] = ["LabelID", "LabelIDs", "ParentID"];
 
 /// Arrays keep this many elements.
 const ARRAY_KEEP: usize = 3;
+/// Larger `Order` values are zeroed: a message's `Order` is a global sequence
+/// that re-encodes arrival time.
+const MAX_KEPT_ORDER: i64 = 9999;
 const SCRUBBED: &str = "<scrubbed>";
 
 /// Maps ids and addresses to stable placeholders and drops everything else.
@@ -197,6 +200,10 @@ impl Scrubber {
         if value.is_number() {
             if TIME_KEYS.contains(&key) {
                 return json!(1_700_000_000);
+            }
+
+            if key == "Order" && value.as_i64().is_none_or(|n| n > MAX_KEPT_ORDER) {
+                return json!(0);
             }
 
             return if NUMBER_KEYS.contains(&key) {

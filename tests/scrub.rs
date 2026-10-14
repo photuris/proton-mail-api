@@ -190,6 +190,12 @@ fn numbers_default_to_zero_except_listed_keys() {
     assert_eq!(out["Order"], 4);
     assert_eq!(out["Time"], 1_700_000_000);
     assert_eq!(out["ValidUntil"], 1_700_000_000);
+
+    let out =
+        scrubbed(json!({ "Big": { "Order": 5_802_348_887_479_i64 }, "Small": { "Order": 3 } }));
+
+    assert_eq!(out["Big"]["Order"], 0);
+    assert_eq!(out["Small"]["Order"], 3);
 }
 
 #[test]

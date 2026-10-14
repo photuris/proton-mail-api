@@ -50,9 +50,11 @@ Read `README.md` first. This file holds what the code does not say.
   `PROTON_APP_VERSION`, `PROTON_USER_AGENT` (optional; overrides the default
   User-Agent), `PROTON_CAPTURE` (`1` runs `tests/capture.rs`, the read-only
   fixture capture).
-- Fixtures in run 1 are synthetic: built from go-proton-api type definitions
-  and rpgp-generated keys, because no real captures exist yet. When a real
-  capture lands, it replaces the synthetic fixture for that endpoint.
+- Shape tests (`tests/captured.rs`) load `tests/fixtures/live/`: scrubbed
+  captures from a real account, made with `tests/capture.rs` and reviewed by a
+  person before commit. Re-capture when Proton changes a shape. Tests that
+  need working crypto keep rpgp-generated keys and hand-built bodies, because
+  captured keys and bodies are scrubbed.
 - Proton rate-limits and may challenge unknown clients with human
   verification. Back off on 429; surface a verification challenge as a
   typed error, never retry it.
