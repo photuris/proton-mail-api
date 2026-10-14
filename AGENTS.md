@@ -33,6 +33,8 @@ Read `README.md` first. This file holds what the code does not say.
 - `src/messages.rs`: list, fetch, decrypt bodies (incl. PGP/MIME) and
   attachments.
 - `src/actions.rs`: mark read/unread, add/remove label, move.
+- `tests/support/scrub.rs`: default-deny JSON scrubber for captured
+  responses; shared by `tests/scrub.rs` and `tests/capture.rs`.
 
 ## Rules
 
@@ -46,7 +48,8 @@ Read `README.md` first. This file holds what the code does not say.
   Its variables: `PROTON_LIVE_TEST`, `PROTON_USERNAME`, `PROTON_PASSWORD`,
   `PROTON_MAILBOX_PASSWORD` (optional), `PROTON_TOTP` (optional),
   `PROTON_APP_VERSION`, `PROTON_USER_AGENT` (optional; overrides the default
-  User-Agent).
+  User-Agent), `PROTON_CAPTURE` (`1` runs `tests/capture.rs`, the read-only
+  fixture capture).
 - Fixtures in run 1 are synthetic: built from go-proton-api type definitions
   and rpgp-generated keys, because no real captures exist yet. When a real
   capture lands, it replaces the synthetic fixture for that endpoint.
