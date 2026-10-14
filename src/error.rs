@@ -87,8 +87,9 @@ pub enum Error {
     /// A Proton recipient has no key that can encrypt.
     #[error("recipient has no usable encryption key")]
     RecipientKeyUnusable,
-    /// The server answered the final send with a definite error; the draft
-    /// was created and is kept. Inspect `source` for the reason.
+    /// The server refused the final send before processing it (a 4xx
+    /// error, a rate limit or a verification challenge); the message was not
+    /// sent and the draft is kept. Inspect `source` for the reason.
     #[error("send rejected; draft {draft_id} kept")]
     SendRejected {
         /// Id of the draft that was created and not sent.
@@ -98,8 +99,10 @@ pub enum Error {
         source: Box<Error>,
     },
     /// The final send was dispatched but its outcome is unknown (no
-    /// response, or a response that could not be read). The message may
-    /// have been sent: do not send again; check `draft_id` first.
+    /// response, a 5xx, or a response that could not be read). The message
+    /// may have been sent or may still be sent: do not send again. Fetching
+    /// `draft_id` shows the SENT flag once delivery is done; its absence is
+    /// not proof that it will not be sent.
     #[error("send outcome unknown for draft {draft_id}; do not resend")]
     SendOutcomeUnknown {
         /// Id of the draft that was being sent.
