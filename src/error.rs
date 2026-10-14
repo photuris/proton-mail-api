@@ -87,14 +87,17 @@ pub enum Error {
     /// A Proton recipient has no key that can encrypt.
     #[error("recipient has no usable encryption key")]
     RecipientKeyUnusable,
-    /// The server refused the final send before processing it (a 4xx
-    /// error, a rate limit or a verification challenge); the message was not
-    /// sent and the draft is kept. Inspect `source` for the reason.
+    /// The message was not sent and the draft is kept: either the server
+    /// refused the final send before processing it (a 4xx error, a rate
+    /// limit or a verification challenge), or a step between creating the
+    /// draft and the final send failed (an attachment upload, reading the
+    /// draft's attachments, or attachment crypto). In the second case the
+    /// draft may hold some of the attachments. Inspect `source` for the reason.
     #[error("send rejected; draft {draft_id} kept")]
     SendRejected {
         /// Id of the draft that was created and not sent.
         draft_id: String,
-        /// The error the send request returned.
+        /// The error of the step that failed.
         #[source]
         source: Box<Error>,
     },
