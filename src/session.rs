@@ -310,6 +310,16 @@ impl Session {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Capture seam for `tests/capture.rs`: the raw body of a GET. Never log it.
+    ///
+    /// # Errors
+    ///
+    /// Any [`Error`] the response classifies to.
+    #[doc(hidden)]
+    pub async fn raw_get(&self, path_and_query: &str) -> Result<Vec<u8>> {
+        self.transport().get_bytes(path_and_query).await
+    }
+
     /// Completes the TOTP step of a login with the 6-digit `code`.
     ///
     /// # Errors

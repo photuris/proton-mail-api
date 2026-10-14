@@ -42,6 +42,33 @@ PROTON_LIVE_TEST=1 PROTON_USERNAME=... PROTON_PASSWORD=... \
   PROTON_APP_VERSION=... cargo test --test live
 ```
 
+The live test flips and restores the read state of the newest Inbox message,
+and moves it to Archive and back. Restoring is best effort; a failed restore
+is reported by name.
+
+## Capturing fixtures
+
+`tests/capture.rs` records the responses of the GET endpoints the crate reads
+and writes them as pretty JSON under `tests/fixtures/live/`. It does nothing
+unless `PROTON_CAPTURE=1`; CI never sets it. It uses the same variables as
+the live test (`PROTON_USERNAME`, `PROTON_PASSWORD`, `PROTON_APP_VERSION`,
+and optionally `PROTON_TOTP` and `PROTON_USER_AGENT`).
+
+```sh
+PROTON_CAPTURE=1 PROTON_USERNAME=... PROTON_PASSWORD='...' \
+  PROTON_APP_VERSION=... cargo test --test capture -- --nocapture
+```
+
+- The capture is read-only: it sends GET requests only.
+- Every response is scrubbed by a default-deny policy
+  (`tests/support/scrub.rs`): ids and addresses become placeholders, header
+  maps are dropped, and a string or number survives only if a rule keeps it.
+  Raw responses are never written or printed.
+- The files are staged in `tests/fixtures/live.tmp` and replace
+  `tests/fixtures/live` only when the whole capture succeeded.
+- Read every file before you commit it. The scrubber is tested offline, but
+  only you can tell whether something in your mailbox leaked through.
+
 ## Checks
 
 ```sh
