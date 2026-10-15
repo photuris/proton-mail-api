@@ -1,6 +1,6 @@
 [package]
 name = "proton-mail-api"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Unofficial pure-Rust client for the Proton Mail API (SRP login, key unlock, mail read and triage)"
 license = "MIT"
