@@ -52,7 +52,7 @@ Read `README.md` first. This file holds what the code does not say.
   `PROTON_APP_VERSION`, `PROTON_USER_AGENT` (optional; overrides the default
   User-Agent), `PROTON_LIVE_SEND` (`1` runs `tests/live_send.rs`, which sends
   real mail), `PROTON_LIVE_SEND_EXTERNAL` (optional address outside Proton for
-  a second message), `PROTON_CAPTURE` (`1` runs `tests/capture.rs`, the
+  the optional external message), `PROTON_CAPTURE` (`1` runs `tests/capture.rs`, the
   read-only fixture capture).
 - Shape tests (`tests/captured.rs`) load `tests/fixtures/live/`: scrubbed
   captures from a real account, made with `tests/capture.rs` and reviewed by a
