@@ -13,7 +13,7 @@ notice. Bridge is the only route Proton supports.
 - Keys: unlock user and address keys with the mailbox password (OpenPGP)
 - Read: labels, message list, fetch and decrypt body and attachments,
   change-events feed
-- Triage: mark read/unread, move, label
+- Triage: mark read/unread, move, label, permanently delete, empty a folder
 - Send: plain or HTML body; Proton recipients get the message encrypted,
   others in the clear; reply and forward; attachments, regular and inline;
   a forward carries the original's attachments

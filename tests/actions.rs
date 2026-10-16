@@ -195,3 +195,75 @@ async fn empty_ids_sends_nothing() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn delete_messages_chunks_and_reports_refused_ids() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/mail/v4/messages/delete"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "Code": 1001,
+            "Responses": [
+                { "ID": "m0", "Response": { "Code": 1000 } },
+                { "ID": "m7", "Response": { "Code": 2501, "Error": "gone" } },
+            ],
+        })))
+        .mount(&server)
+        .await;
+
+    let err = session(&server)
+        .delete_messages(&ids(151))
+        .await
+        .expect_err("one item refused per chunk");
+
+    let reqs = puts(&server, "/mail/v4/messages/delete").await;
+    let sizes: Vec<usize> = reqs
+        .iter()
+        .map(|r| body(r)["IDs"].as_array().expect("IDs array").len())
+        .collect();
+
+    assert_eq!(sizes, [150, 1], "both chunks sent despite the refusal");
+    assert_eq!(body(&reqs[1]), json!({ "IDs": ["m150"] }));
+    match err {
+        Error::ActionFailed { ids } => assert_eq!(ids, ["m7", "m7"]),
+        other => panic!("expected ActionFailed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn delete_messages_with_no_ids_sends_nothing() {
+    let server = MockServer::start().await;
+
+    session(&server)
+        .delete_messages(&[])
+        .await
+        .expect("delete_messages");
+
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("recording on")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn empty_deletes_with_encoded_label_id() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/mail/v4/messages/empty"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "Code": 1000 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    session(&server).empty("a&b=c").await.expect("empty");
+
+    let reqs = server.received_requests().await.expect("recording on");
+    let query: Vec<(String, String)> = reqs[0].url.query_pairs().into_owned().collect();
+
+    assert_eq!(query, [("LabelID".to_owned(), "a&b=c".to_owned())]);
+}

@@ -32,7 +32,8 @@ Read `README.md` first. This file holds what the code does not say.
 - `src/events.rs`: latest event id and the change-event feed.
 - `src/messages.rs`: list, fetch, decrypt bodies (incl. PGP/MIME) and
   attachments.
-- `src/actions.rs`: mark read/unread, add/remove label, move.
+- `src/actions.rs`: mark read/unread, add/remove label, move, permanent
+  delete, empty a folder.
 - `src/compose.rs`: draft body and send package crypto.
 - `src/send.rs`: recipient key lookup and the send flow.
 - `tests/support/scrub.rs`: default-deny JSON scrubber for captured
