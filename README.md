@@ -53,8 +53,10 @@ is reported by name.
 a text attachment and an inline image, which it then finds in the Inbox,
 decrypts and downloads the attachments of; a forward of that message to the
 account itself, which it checks for the same attachments; and optionally one
-plain message with the text attachment to an address outside Proton. All stay
-in place; the test deletes nothing. It does nothing
+plain message with the text attachment to an address outside Proton. Last,
+it permanently deletes the two messages it found in the Inbox (the message
+and the forward) and checks that they left All Mail; the rest stay in place.
+It does nothing
 unless `PROTON_LIVE_SEND=1`; CI never sets it. It uses the same variables as
 the live test, plus `PROTON_LIVE_SEND_EXTERNAL`, an optional address outside
 Proton that receives the optional external message. Its success is the only check; read

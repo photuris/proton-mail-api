@@ -12,7 +12,9 @@
 //! attachment and an inline image, a forward of that message to the account
 //! itself (carrying the received attachments) and, when
 //! `PROTON_LIVE_SEND_EXTERNAL` is set, one plain message with the text
-//! attachment to that address. All stay in place; the test deletes nothing.
+//! attachment to that address. Last, it permanently deletes the two
+//! messages it found in the Inbox (the message and the forward) and checks
+//! that they left All Mail; the rest stay in place.
 
 use std::env;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -202,6 +204,7 @@ async fn check_attachments(
 
 /// Forwards `received` to the account itself with its attachments, waits for
 /// the forward in the Inbox and checks that the `sent` attachments came along.
+/// Returns the id of the forward as received, if it arrived.
 async fn forward_to_self(
     session: &Session,
     keys: &UnlockedKeys,
@@ -210,7 +213,7 @@ async fn forward_to_self(
     received: &Message,
     sent: &[OutgoingAttachment],
     results: &mut Vec<Outcome>,
-) {
+) -> Option<String> {
     let subject = format!("{marker} forward");
     let forward = OutgoingMessage {
         parent: Some(ParentRef {
@@ -221,32 +224,25 @@ async fn forward_to_self(
         ..message(from, &from.email, subject.clone(), "forward check")
     };
 
-    if take(
+    take(
         results,
         "forward to self",
         session.send(keys, &forward).await,
-    )
-    .is_none()
-    {
-        return;
-    }
+    )?;
 
-    let Some(id) = poll_inbox(
+    let id = poll_inbox(
         session,
         &subject,
         "forwarded message did not arrive in Inbox",
         results,
     )
-    .await
-    else {
-        return;
-    };
+    .await?;
     let Some(forwarded) = take(
         results,
         "fetch forwarded message",
         session.message(&id).await,
     ) else {
-        return;
+        return Some(id);
     };
 
     let mut matches = forwarded.attachments.len() == sent.len();
@@ -269,6 +265,44 @@ async fn forward_to_self(
         matches &= data == want.data;
     }
     expect(results, matches, "forwarded attachment does not match");
+
+    Some(id)
+}
+
+/// Permanently deletes `ids`, then asks All Mail until none of them is
+/// listed. A miss records a failure; an API error is recorded and ends the
+/// poll.
+async fn delete_and_confirm(session: &Session, ids: &[String], results: &mut Vec<Outcome>) {
+    if take(
+        results,
+        "delete messages",
+        session.delete_messages(ids).await,
+    )
+    .is_none()
+    {
+        return;
+    }
+
+    let query = MessageQuery {
+        label_id: Some(system::ALL_MAIL.into()),
+        ..Default::default()
+    };
+    for attempt in 0..INBOX_POLLS {
+        let Some(page) = take(
+            results,
+            "list all mail",
+            session.list_messages(&query).await,
+        ) else {
+            return;
+        };
+        if !page.messages.iter().any(|m| ids.contains(&m.id)) {
+            return;
+        }
+        if attempt + 1 < INBOX_POLLS {
+            tokio::time::sleep(INBOX_POLL_WAIT).await;
+        }
+    }
+    results.push(Err("deleted message still in All Mail".to_string()));
 }
 
 /// Everything after login. Steps that need an earlier result are skipped
@@ -336,7 +370,7 @@ async fn send_steps(
         }
 
         check_attachments(session, &keys, &received, &attachments, results).await;
-        forward_to_self(
+        let forwarded = forward_to_self(
             session,
             &keys,
             from,
@@ -346,6 +380,9 @@ async fn send_steps(
             results,
         )
         .await;
+
+        let ids: Vec<String> = [Some(id), forwarded].into_iter().flatten().collect();
+        delete_and_confirm(session, &ids, results).await;
     }
 
     if let Some(address) = external {
