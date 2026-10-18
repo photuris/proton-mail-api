@@ -195,13 +195,18 @@ async fn mount(
 
 /// A resumed session pointed at `server`.
 fn session(server: &MockServer) -> Session {
+    session_with_key_password(server, Value::Null)
+}
+
+/// A resumed session pointed at `server` whose blob carries `key_password`.
+fn session_with_key_password(server: &MockServer, key_password: Value) -> Session {
     let blob: PersistedSession = serde_json::from_value(json!({
         "uid": "uid-1",
         "access_token": "access-1",
         "refresh_token": "refresh-1",
         "password_mode": "Single",
         "scope": "full",
-        "key_password": null,
+        "key_password": key_password,
     }))
     .expect("blob parses");
 
@@ -279,6 +284,147 @@ async fn unlocks_user_key_with_salted_key_password() {
     assert!(
         address_key.decrypts_with(&keys.decryption_keys()),
         "address key falls back to the primary key password"
+    );
+}
+
+/// Serves the user and addresses, and answers the salts endpoint the way
+/// Proton does once the post-login scope has lapsed. `salts_calls` is how
+/// many salts requests the test expects.
+async fn mount_lapsed_salts(
+    server: &MockServer,
+    user_keys: Vec<Value>,
+    addresses: Vec<Value>,
+    salts_calls: u64,
+) {
+    for (p, body) in [
+        (
+            "/core/v4/users",
+            json!({"Code": 1000, "User": {
+                "ID": "user-1", "Name": "test", "Email": "test@example.com", "Keys": user_keys,
+            }}),
+        ),
+        (
+            "/core/v4/addresses",
+            json!({"Code": 1000, "Addresses": addresses}),
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
+    Mock::given(method("GET"))
+        .and(path("/core/v4/keys/salts"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+            "Code": 9101, "Error": "Access token does not have sufficient scope",
+        })))
+        .expect(salts_calls)
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn resumed_key_password_unlocks_without_fetching_salts() {
+    let server = MockServer::start().await;
+    let salt = salt();
+    let derived = srp::key_password(MAILBOX.as_bytes(), &salt).expect("key password");
+    let user = TestKey::salted(&salt);
+    let address_key = TestKey::salted(&salt);
+
+    mount_lapsed_salts(
+        &server,
+        vec![record("k1", &user, true, true)],
+        vec![address(
+            "a1",
+            "a@example.com",
+            1,
+            vec![record("ak1", &address_key, true, true)],
+        )],
+        0,
+    )
+    .await;
+
+    let session = session_with_key_password(&server, json!(derived.as_str()));
+    // The mailbox password is wrong on purpose: the stored key password wins.
+    let keys = unlocked(session.unlock_keys("not the mailbox password").await);
+
+    assert!(
+        user.decrypts_with(&keys.user_keys.iter().collect::<Vec<_>>()),
+        "user key unlocks with the stored key password"
+    );
+    assert!(
+        address_key.decrypts_with(&keys.decryption_keys()),
+        "address key unlocks"
+    );
+    assert!(
+        persisted_key_password(&session) == json!(derived.as_str()),
+        "stored key password still persists"
+    );
+}
+
+#[tokio::test]
+async fn stale_key_password_falls_back_to_salts() {
+    let server = MockServer::start().await;
+    let salt = salt();
+    let user = TestKey::salted(&salt);
+    let address_key = TestKey::salted(&salt);
+
+    mount(
+        &server,
+        vec![record("k1", &user, true, true)],
+        vec![salt_entry("k1", &salt)],
+        vec![address(
+            "a1",
+            "a@example.com",
+            1,
+            vec![record("ak1", &address_key, true, true)],
+        )],
+    )
+    .await;
+
+    let session = session_with_key_password(&server, json!("old key password"));
+    let keys = unlocked(session.unlock_keys(MAILBOX).await);
+
+    assert!(
+        user.decrypts_with(&keys.user_keys.iter().collect::<Vec<_>>()),
+        "user key unlocks through the salts"
+    );
+    assert!(
+        persisted_key_password(&session) != json!("old key password"),
+        "the fresh key password replaces the stale one"
+    );
+}
+
+#[tokio::test]
+async fn stale_key_password_with_lapsed_salts_is_an_error() {
+    let server = MockServer::start().await;
+    let salt = salt();
+    let user = TestKey::salted(&salt);
+    let address_key = TestKey::salted(&salt);
+
+    mount_lapsed_salts(
+        &server,
+        vec![record("k1", &user, true, true)],
+        vec![address(
+            "a1",
+            "a@example.com",
+            1,
+            vec![record("ak1", &address_key, true, true)],
+        )],
+        1,
+    )
+    .await;
+
+    let session = session_with_key_password(&server, json!("old key password"));
+
+    assert!(
+        matches!(
+            session.unlock_keys(MAILBOX).await,
+            Err(Error::Api { code: 9101, .. })
+        ),
+        "the scope error surfaces so the caller can ask for a new login"
     );
 }
 

@@ -27,7 +27,8 @@ Read `README.md` first. This file holds what the code does not say.
 - `src/srp.rs`: Proton's SRP-6a variant, modulus verification, key password.
 - `src/session.rs`: `Client` builder, login, TOTP, refresh, logout,
   `PersistedSession`.
-- `src/keys.rs`: fetch user, addresses and salts; `UnlockedKeys`.
+- `src/keys.rs`: fetch user, addresses and salts; `UnlockedKeys` (stored key
+  password first, salts only after login).
 - `src/labels.rs`: labels, folders, system folder ids.
 - `src/events.rs`: latest event id and the change-event feed.
 - `src/messages.rs`: list, fetch, decrypt bodies (incl. PGP/MIME) and
@@ -64,6 +65,11 @@ Read `README.md` first. This file holds what the code does not say.
   verification. Back off on 429; surface a verification challenge as a
   typed error, never retry it.
 - `std::env::set_var` only in a synchronous `main`. Tests pass values in.
+- `GET /core/v4/keys/salts` needs a scope Proton grants only for a short time
+  after login; a resumed session gets 9101 (http 403) from it hours later.
+  `unlock_keys` therefore unlocks with the session's stored key password and
+  fetches salts only when there is none or it no longer unlocks the primary
+  key. Keep the salts off the resume path.
 
 ## Checks before claiming done
 

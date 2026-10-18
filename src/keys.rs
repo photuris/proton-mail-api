@@ -236,9 +236,16 @@ impl Session {
         Ok(reply.key_salts)
     }
 
-    /// Unlocks the user keys with `mailbox_password` and the address keys
-    /// with their tokens, and remembers the primary key's password so
-    /// [`persist`](Session::persist) carries it.
+    /// Unlocks the user keys and the address keys (with their tokens), and
+    /// remembers the primary key's password so [`persist`](Session::persist)
+    /// carries it.
+    ///
+    /// When the session already holds a key password (from an earlier unlock,
+    /// or resumed from a blob that carries one) and it unlocks the primary
+    /// user key, every user key is tried with it and the key salts are not
+    /// fetched: Proton grants the salts scope only for a short time after
+    /// login, so a resumed session gets 9101 from that endpoint. Otherwise the
+    /// key passwords are derived from `mailbox_password` and the salts.
     ///
     /// Keys that cannot be unlocked are skipped, except the primary user key.
     ///
@@ -246,16 +253,9 @@ impl Session {
     ///
     /// [`Error::NoUsableKey`] when the primary user key is inactive or does
     /// not unlock, or when no address key unlocks; the transport's errors
-    /// from the three fetches.
+    /// from the fetches.
     pub async fn unlock_keys(&self, mailbox_password: &str) -> Result<UnlockedKeys> {
         let user = self.user().await?;
-        let salts = self.key_salts().await?;
-        let addresses = self.addresses().await?;
-
-        let salts: HashMap<&str, &str> = salts
-            .iter()
-            .filter_map(|s| Some((s.id.as_str(), present(s.key_salt.as_deref())?)))
-            .collect();
 
         let primary = user
             .keys
@@ -264,25 +264,50 @@ impl Session {
             .or(user.keys.first())
             .filter(|k| k.active.0)
             .ok_or(Error::NoUsableKey)?;
-        let primary_password = user_key_password(mailbox_password, salts.get(primary.id.as_str()))
-            .ok_or(Error::NoUsableKey)?;
-        let primary_key =
-            unlock_key(&primary.private_key, &primary_password).map_err(|_| Error::NoUsableKey)?;
-
-        let mut user_keys = vec![primary_key];
-
-        for record in user
+        let others = user
             .keys
             .iter()
-            .filter(|k| k.active.0 && k.id != primary.id)
-        {
-            if let Some(password) =
-                user_key_password(mailbox_password, salts.get(record.id.as_str()))
-                && let Ok(key) = unlock_key(&record.private_key, &password)
-            {
-                user_keys.push(key);
+            .filter(|k| k.active.0 && k.id != primary.id);
+        let stored = self.key_password().and_then(|password| {
+            let key = unlock_key(&primary.private_key, &password).ok()?;
+
+            Some((password, key))
+        });
+
+        let (primary_password, user_keys) = if let Some((password, primary_key)) = stored {
+            let mut user_keys = vec![primary_key];
+
+            user_keys.extend(others.filter_map(|r| unlock_key(&r.private_key, &password).ok()));
+
+            (password, user_keys)
+        } else {
+            let salts = self.key_salts().await?;
+            let salts: HashMap<&str, &str> = salts
+                .iter()
+                .filter_map(|s| Some((s.id.as_str(), present(s.key_salt.as_deref())?)))
+                .collect();
+
+            let primary_password =
+                user_key_password(mailbox_password, salts.get(primary.id.as_str()))
+                    .ok_or(Error::NoUsableKey)?;
+            let primary_key = unlock_key(&primary.private_key, &primary_password)
+                .map_err(|_| Error::NoUsableKey)?;
+
+            let mut user_keys = vec![primary_key];
+
+            for record in others {
+                if let Some(password) =
+                    user_key_password(mailbox_password, salts.get(record.id.as_str()))
+                    && let Ok(key) = unlock_key(&record.private_key, &password)
+                {
+                    user_keys.push(key);
+                }
             }
-        }
+
+            (primary_password, user_keys)
+        };
+
+        let addresses = self.addresses().await?;
 
         let mut address_keys = Vec::new();
 
