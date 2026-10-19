@@ -5,16 +5,16 @@ Read `README.md` first. This file holds what the code does not say.
 ## Shape
 
 - Single library crate, edition 2024, pure Rust. No Go FFI for SRP: Proton's
-  SRP variant (bcrypt-hashed password, Proton-signed modulus) is
-  reimplemented here and tested against captured vectors.
-- Reference implementations, in order of trust: `ProtonMail/go-proton-api`
-  (the Bridge library), `ProtonMail/WebClients` (the web app, authoritative
-  for message packaging on send), `emersion/hydroxide`, `proton-api-rs`
-  (archived community crate; shows the shape, not the SRP).
+  SRP variant (bcrypt-hashed password, Proton-signed modulus) is reimplemented
+  here and tested against captured vectors.
+- Reference implementations, in order of trust: `ProtonMail/go-proton-api` (the
+  Bridge library), `ProtonMail/WebClients` (the web app, authoritative for
+  message packaging on send), `emersion/hydroxide`, `proton-api-rs` (archived
+  community crate; shows the shape, not the SRP).
 - The crate owns the Proton model (session, keys, labels, messages). The
   consumer maps it into its own store. No posto types in here.
-- Secrets the consumer must persist (refresh token, session UID, unlocked
-  key material if cached) are handed back as one opaque serialisable blob.
+- Secrets the consumer must persist (refresh token, session UID, unlocked key
+  material if cached) are handed back as one opaque serialisable blob.
 
 ## Module map
 
@@ -33,37 +33,37 @@ Read `README.md` first. This file holds what the code does not say.
 - `src/events.rs`: latest event id and the change-event feed.
 - `src/messages.rs`: list, fetch, decrypt bodies (incl. PGP/MIME) and
   attachments.
-- `src/actions.rs`: mark read/unread, add/remove label, move, permanent
-  delete, empty a folder.
+- `src/actions.rs`: mark read/unread, add/remove label, move, permanent delete,
+  empty a folder.
 - `src/compose.rs`: draft body and send package crypto.
 - `src/send.rs`: recipient key lookup and the send flow.
-- `tests/support/scrub.rs`: default-deny JSON scrubber for captured
-  responses; shared by `tests/scrub.rs` and `tests/capture.rs`.
+- `tests/support/scrub.rs`: default-deny JSON scrubber for captured responses;
+  shared by `tests/scrub.rs` and `tests/capture.rs`.
 
 ## Rules
 
-- Never put a token, password, passphrase, or private key in an error, log,
-  or debug output. `Debug` impls on those types print a redaction marker.
-  Never format deserialisation errors that can embed response bodies.
+- Never put a token, password, passphrase, or private key in an error, log, or
+  debug output. `Debug` impls on those types print a redaction marker. Never
+  format deserialisation errors that can embed response bodies.
 - Private key material lives in types that zeroize on drop.
-- Tests run without a live server: fixtures captured from real responses
-  with identifiers scrubbed. A live integration test exists but is gated by
-  `PROTON_LIVE_TEST=1` and credentials from env; it is never run in CI.
-  Its variables: `PROTON_LIVE_TEST`, `PROTON_USERNAME`, `PROTON_PASSWORD`,
+- Tests run without a live server: fixtures captured from real responses with
+  identifiers scrubbed. A live integration test exists but is gated by
+  `PROTON_LIVE_TEST=1` and credentials from env; it is never run in CI. Its
+  variables: `PROTON_LIVE_TEST`, `PROTON_USERNAME`, `PROTON_PASSWORD`,
   `PROTON_MAILBOX_PASSWORD` (optional), `PROTON_TOTP` (optional),
   `PROTON_APP_VERSION`, `PROTON_USER_AGENT` (optional; overrides the default
   User-Agent), `PROTON_LIVE_SEND` (`1` runs `tests/live_send.rs`, which sends
   real mail), `PROTON_LIVE_SEND_EXTERNAL` (optional address outside Proton for
-  the optional external message), `PROTON_CAPTURE` (`1` runs `tests/capture.rs`, the
-  read-only fixture capture).
+  the optional external message), `PROTON_CAPTURE` (`1` runs
+  `tests/capture.rs`, the read-only fixture capture).
 - Shape tests (`tests/captured.rs`) load `tests/fixtures/live/`: scrubbed
   captures from a real account, made with `tests/capture.rs` and reviewed by a
-  person before commit. Re-capture when Proton changes a shape. Tests that
-  need working crypto keep rpgp-generated keys and hand-built bodies, because
+  person before commit. Re-capture when Proton changes a shape. Tests that need
+  working crypto keep rpgp-generated keys and hand-built bodies, because
   captured keys and bodies are scrubbed.
-- Proton rate-limits and may challenge unknown clients with human
-  verification. Back off on 429; surface a verification challenge as a
-  typed error, never retry it.
+- Proton rate-limits and may challenge unknown clients with human verification.
+  Back off on 429; surface a verification challenge as a typed error, never
+  retry it.
 - `std::env::set_var` only in a synchronous `main`. Tests pass values in.
 - `GET /core/v4/keys/salts` needs a scope Proton grants only for a short time
   after login; a resumed session gets 9101 (http 403) from it hours later.
@@ -78,3 +78,28 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community
+structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or
+instructions before doing anything else.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when
+  graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for
+  relationships and `graphify explain "<concept>"` for focused concepts. These
+  return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw
+  grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates;
+  dirty graph files are not a reason to skip graphify. Only skip graphify if
+  the task is about stale or incorrect graph output, or the user explicitly
+  says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of
+  raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when
+  query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current
+  (AST-only, no API cost).
